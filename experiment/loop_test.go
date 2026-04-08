@@ -76,7 +76,7 @@ func TestLoop_EndToEnd(t *testing.T) {
 			Command:   "sh " + evalScript,
 			Metric:    `metric:\s+(\d+)`,
 			Direction: config.DirectionMinimize,
-			Timeout:   10 * time.Second,
+			Timeout:   config.Duration{Duration: 10 * time.Second},
 		},
 		Provider: config.ProviderConfig{
 			Backend:   config.BackendAnthropic,
@@ -95,7 +95,7 @@ func TestLoop_EndToEnd(t *testing.T) {
 	}
 	executor := tools.NewExecutor(sandbox, 10*time.Second)
 
-	eval, err := NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout)
+	eval, err := NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout.Duration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 			Command:   "echo 'metric: 1'",
 			Metric:    `metric:\s+(\d+)`,
 			Direction: config.DirectionMinimize,
-			Timeout:   5 * time.Second,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
 		Provider: config.ProviderConfig{MaxTokens: 1024},
 		Git:      config.GitConfig{Enabled: false},
@@ -222,7 +222,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 
 	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
 	executor := tools.NewExecutor(sandbox, 5*time.Second)
-	eval, _ := NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout)
+	eval, _ := NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout.Duration)
 	git := NewGit(false, dir, nil)
 	resultsPath := filepath.Join(dir, "results.tsv")
 	logger, _ := NewResultLogger(resultsPath)

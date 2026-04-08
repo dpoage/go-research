@@ -15,6 +15,8 @@ const (
 
 	BackendAnthropic = "anthropic"
 	BackendOpenAI    = "openai"
+
+	DefaultMaxTokens = 16384
 )
 
 // Config is the top-level research configuration loaded from research.yaml.
@@ -28,10 +30,10 @@ type Config struct {
 
 // EvalConfig defines how experiments are evaluated.
 type EvalConfig struct {
-	Command   string        `yaml:"command"`
-	Metric    string        `yaml:"metric"`
-	Direction string        `yaml:"direction"`
-	Timeout   time.Duration `yaml:"timeout"`
+	Command   string   `yaml:"command"`
+	Metric    string   `yaml:"metric"`
+	Direction string   `yaml:"direction"`
+	Timeout   Duration `yaml:"timeout"`
 }
 
 // ProviderConfig selects and configures the LLM backend.
@@ -71,11 +73,11 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Eval.Timeout == 0 {
-		c.Eval.Timeout = 5 * time.Minute
+	if c.Eval.Timeout.Duration == 0 {
+		c.Eval.Timeout = Duration{5 * time.Minute}
 	}
 	if c.Provider.MaxTokens == 0 {
-		c.Provider.MaxTokens = 16384
+		c.Provider.MaxTokens = DefaultMaxTokens
 	}
 	if c.Git.BranchPrefix == "" {
 		c.Git.BranchPrefix = "research/"

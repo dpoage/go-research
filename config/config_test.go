@@ -42,7 +42,7 @@ git:
 	if cfg.Eval.Direction != "minimize" {
 		t.Errorf("direction = %q, want %q", cfg.Eval.Direction, "minimize")
 	}
-	if cfg.Eval.Timeout != 5*time.Minute {
+	if cfg.Eval.Timeout.Duration != 5*time.Minute {
 		t.Errorf("timeout = %v, want 5m", cfg.Eval.Timeout)
 	}
 	if cfg.Provider.Backend != "anthropic" {
@@ -72,7 +72,7 @@ provider:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.Eval.Timeout != 5*time.Minute {
+	if cfg.Eval.Timeout.Duration != 5*time.Minute {
 		t.Errorf("default timeout = %v, want 5m", cfg.Eval.Timeout)
 	}
 	if cfg.Provider.MaxTokens != 16384 {

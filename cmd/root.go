@@ -42,6 +42,7 @@ Flags:
 
 Commands:
   init       Scaffold research.yaml and program.md
+  validate   Dry-run config check
   run        Start the autonomous experiment loop
   status     Show current run state
   history    Display experiment results
@@ -78,8 +79,14 @@ func Run(ctx context.Context, args []string) int {
 		return 0
 	case "init":
 		err = runInit(subArgs)
+	case "validate":
+		err = runValidate(gf, subArgs)
 	case "run":
 		err = runRun(ctx, gf, subArgs)
+	case "status":
+		err = runStatus(gf, subArgs)
+	case "history":
+		err = runHistory(gf, subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", subcmd)
 		usage()

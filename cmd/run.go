@@ -13,13 +13,17 @@ import (
 	"github.com/dpoage/go-research/tools"
 )
 
-// defaultToolTimeout is the maximum duration for run_command tool calls.
-const defaultToolTimeout = 30 * time.Second
+const (
+	// defaultToolTimeout is the maximum duration for run_command tool calls.
+	defaultToolTimeout = 30 * time.Second
+
+	defaultResultsFile = "results.tsv"
+)
 
 func runRun(ctx context.Context, gf globalFlags, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	maxIter := fs.Int("max-iter", 0, "maximum iterations (0 = unlimited)")
-	resultFile := fs.String("results", "results.tsv", "path to TSV result log")
+	resultFile := fs.String("results", defaultResultsFile, "path to TSV result log")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -41,7 +45,7 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 
 	executor := tools.NewExecutor(sandbox, defaultToolTimeout)
 
-	eval, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout)
+	eval, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout.Duration)
 	if err != nil {
 		return fmt.Errorf("create eval: %w", err)
 	}

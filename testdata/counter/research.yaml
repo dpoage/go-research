@@ -1,0 +1,23 @@
+# Example: counter
+# A trivial fixture used for testing and as a template.
+
+program: program.md
+
+files:
+  - counter.txt
+
+eval:
+  command: "bash eval.sh"
+  metric: 'count: (\d+)'
+  direction: maximize
+  timeout: 30s
+
+provider:
+  backend: anthropic
+  model: claude-sonnet-4-20250514
+  api_key_env: ANTHROPIC_API_KEY
+  max_tokens: 16384
+
+git:
+  enabled: false
+  branch_prefix: "research/"

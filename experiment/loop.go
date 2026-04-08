@@ -12,14 +12,32 @@ import (
 	"github.com/dpoage/go-research/tools"
 )
 
+// maxToolOutput is the maximum bytes of tool output sent back to the LLM
+// to avoid blowing the context window.
+const maxToolOutput = 16000
+
 // Loop runs the autonomous experiment cycle.
 type Loop struct {
-	Config   *config.Config
-	Provider llm.Provider
-	Executor *tools.Executor
-	Eval     *Eval
-	Git      *Git
-	Logger   *ResultLogger
+	config      *config.Config
+	provider    llm.Provider
+	executor    *tools.Executor
+	eval        *Eval
+	git         *Git
+	logger      *ResultLogger
+	resultsPath string
+}
+
+// NewLoop creates a Loop wired to the given collaborators.
+func NewLoop(cfg *config.Config, provider llm.Provider, executor *tools.Executor, eval *Eval, git *Git, logger *ResultLogger, resultsPath string) *Loop {
+	return &Loop{
+		config:      cfg,
+		provider:    provider,
+		executor:    executor,
+		eval:        eval,
+		git:         git,
+		logger:      logger,
+		resultsPath: resultsPath,
+	}
 }
 
 // ToolDefs returns the tool definitions to register with the LLM.
@@ -46,7 +64,7 @@ func ToolDefs() []llm.ToolDef {
 // Run executes the experiment loop until the context is cancelled.
 // maxIter <= 0 means unlimited iterations.
 func (l *Loop) Run(ctx context.Context, maxIter int) error {
-	program, err := os.ReadFile(l.Config.Program)
+	program, err := os.ReadFile(l.config.Program)
 	if err != nil {
 		return fmt.Errorf("read program: %w", err)
 	}
@@ -74,7 +92,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 		// Evaluate.
 		fmt.Println("Running evaluation...")
-		result := l.Eval.Run(ctx)
+		result := l.eval.Run(ctx)
 		if result.Error != nil {
 			fmt.Printf("Eval error: %v\n", result.Error)
 			l.revert(iter)
@@ -92,7 +110,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			// Log before commit so the results file is included in the snapshot.
 			l.logResult(iter, result, StatusKeep, "")
 
-			if err := l.Git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric)); err != nil {
+			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.resultsPath); err != nil {
 				fmt.Printf("Warning: git commit failed: %v\n", err)
 			}
 		} else {
@@ -109,7 +127,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 func (l *Loop) buildPrompt(iter int, bestMetric float64) string {
 	prompt := fmt.Sprintf("Iteration %d.\n\nAllowed files: %v\nEval command: %s\nDirection: %s\n",
-		iter, l.Config.Files, l.Config.Eval.Command, l.Config.Eval.Direction)
+		iter, l.config.Files, l.config.Eval.Command, l.config.Eval.Direction)
 
 	if !math.IsNaN(bestMetric) {
 		prompt += fmt.Sprintf("Current best metric: %.6f\n", bestMetric)
@@ -128,11 +146,11 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			return messages, ctx.Err()
 		}
 
-		resp, err := l.Provider.Complete(ctx, &llm.Request{
+		resp, err := l.provider.Complete(ctx, &llm.Request{
 			System:    system,
 			Messages:  messages,
 			Tools:     toolDefs,
-			MaxTokens: l.Config.Provider.MaxTokens,
+			MaxTokens: l.config.Provider.MaxTokens,
 		})
 		if err != nil {
 			return messages, fmt.Errorf("LLM completion (round %d): %w", round+1, err)
@@ -152,13 +170,12 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 
 		// Dispatch each tool call and build result messages.
 		for _, tc := range toolCalls {
-			result := l.Executor.Dispatch(ctx, tc.Name, tc.Input)
+			result := l.executor.Dispatch(ctx, tc.Name, tc.Input)
 
 			// Truncate long output to avoid blowing context.
 			output := result.Output
-			const maxOutput = 16000
-			if len(output) > maxOutput {
-				output = output[:maxOutput] + "\n... (truncated)"
+			if len(output) > maxToolOutput {
+				output = output[:maxToolOutput] + "\n... (truncated)"
 			}
 
 			fmt.Printf("Tool %s: %s\n", tc.Name, truncateDisplay(output, 200))
@@ -173,20 +190,20 @@ func (l *Loop) isBetter(current, best float64) bool {
 	if math.IsNaN(best) {
 		return true
 	}
-	if l.Config.Eval.Direction == config.DirectionMinimize {
+	if l.config.Eval.Direction == config.DirectionMinimize {
 		return current < best
 	}
 	return current > best
 }
 
 func (l *Loop) revert(iter int) {
-	if err := l.Git.Revert(); err != nil {
+	if err := l.git.Revert(); err != nil {
 		fmt.Printf("Warning: revert failed (iter %d): %v\n", iter, err)
 	}
 }
 
 func (l *Loop) logResult(iter int, result EvalResult, status Status, note string) {
-	if err := l.Logger.Append(ResultEntry{
+	if err := l.logger.Append(ResultEntry{
 		Iteration: iter,
 		Metric:    result.Metric,
 		Status:    status,
@@ -199,7 +216,7 @@ func (l *Loop) logResult(iter int, result EvalResult, status Status, note string
 
 func (l *Loop) logError(iter int, err error) {
 	fmt.Printf("Error in iteration %d: %v\n", iter, err)
-	if logErr := l.Logger.Append(ResultEntry{
+	if logErr := l.logger.Append(ResultEntry{
 		Iteration: iter,
 		Status:    StatusError,
 		Note:      err.Error(),

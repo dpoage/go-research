@@ -13,6 +13,9 @@ import (
 	"github.com/dpoage/go-research/tools"
 )
 
+// defaultToolTimeout is the maximum duration for run_command tool calls.
+const defaultToolTimeout = 30 * time.Second
+
 func runRun(ctx context.Context, gf globalFlags, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	maxIter := fs.Int("max-iter", 0, "maximum iterations (0 = unlimited)")
@@ -36,14 +39,14 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 		return fmt.Errorf("create sandbox: %w", err)
 	}
 
-	executor := tools.NewExecutor(sandbox, 30*time.Second)
+	executor := tools.NewExecutor(sandbox, defaultToolTimeout)
 
 	eval, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout)
 	if err != nil {
 		return fmt.Errorf("create eval: %w", err)
 	}
 
-	git := experiment.NewGit(cfg.Git.Enabled)
+	git := experiment.NewGit(cfg.Git.Enabled, ".", cfg.Files)
 
 	logger, err := experiment.NewResultLogger(*resultFile)
 	if err != nil {
@@ -69,14 +72,6 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 		}
 	}
 
-	loop := &experiment.Loop{
-		Config:   cfg,
-		Provider: provider,
-		Executor: executor,
-		Eval:     eval,
-		Git:      git,
-		Logger:   logger,
-	}
-
+	loop := experiment.NewLoop(cfg, provider, executor, eval, git, logger, *resultFile)
 	return loop.Run(ctx, *maxIter)
 }

@@ -63,11 +63,11 @@ func NewAnthropic(cfg config.ProviderConfig) (*Anthropic, error) {
 
 // anthropicRequest is the wire format for the Anthropic Messages API.
 type anthropicRequest struct {
-	Model     string           `json:"model"`
-	MaxTokens int              `json:"max_tokens"`
-	System    string           `json:"system,omitempty"`
-	Messages  []anthropicMsg   `json:"messages"`
-	Tools     []anthropicTool  `json:"tools,omitempty"`
+	Model     string          `json:"model"`
+	MaxTokens int             `json:"max_tokens"`
+	System    string          `json:"system,omitempty"`
+	Messages  []anthropicMsg  `json:"messages"`
+	Tools     []anthropicTool `json:"tools,omitempty"`
 }
 
 type anthropicMsg struct {
@@ -197,14 +197,14 @@ func (a *Anthropic) Complete(ctx context.Context, req *Request) (*Response, erro
 // We always send the array form for consistency.
 func marshalContentBlocks(blocks []ContentBlock) (json.RawMessage, error) {
 	type wireBlock struct {
-		Type       string          `json:"type"`
-		Text       string          `json:"text,omitempty"`
-		ID         string          `json:"id,omitempty"`
-		Name       string          `json:"name,omitempty"`
-		Input      json.RawMessage `json:"input,omitempty"`
-		ToolUseID  string          `json:"tool_use_id,omitempty"`
-		Content    string          `json:"content,omitempty"`
-		IsError    bool            `json:"is_error,omitempty"`
+		Type      string          `json:"type"`
+		Text      string          `json:"text,omitempty"`
+		ID        string          `json:"id,omitempty"`
+		Name      string          `json:"name,omitempty"`
+		Input     json.RawMessage `json:"input,omitempty"`
+		ToolUseID string          `json:"tool_use_id,omitempty"`
+		Content   string          `json:"content,omitempty"`
+		IsError   bool            `json:"is_error,omitempty"`
 	}
 
 	var out []wireBlock

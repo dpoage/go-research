@@ -57,7 +57,7 @@ func chdir(t *testing.T, dir string) {
 }
 
 func TestGit_Disabled(t *testing.T) {
-	g := NewGit(false)
+	g := NewGit(false, "", nil)
 
 	branch, err := g.CreateBranch("test/")
 	if err != nil {
@@ -79,7 +79,7 @@ func TestGit_CreateBranch(t *testing.T) {
 	dir := initTestRepo(t)
 	chdir(t, dir)
 
-	g := NewGit(true)
+	g := NewGit(true, dir, []string{"README.md"})
 	branch, err := g.CreateBranch("research/")
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestGit_CommitAndRevert(t *testing.T) {
 	dir := initTestRepo(t)
 	chdir(t, dir)
 
-	g := NewGit(true)
+	g := NewGit(true, dir, []string{"README.md"})
 
 	// Modify a file and commit.
 	target := filepath.Join(dir, "README.md")
@@ -146,7 +146,7 @@ func TestGit_CommitNoChanges(t *testing.T) {
 	dir := initTestRepo(t)
 	chdir(t, dir)
 
-	g := NewGit(true)
+	g := NewGit(true, dir, []string{"README.md"})
 
 	// Commit with no changes should be a no-op.
 	if err := g.Commit("nothing"); err != nil {

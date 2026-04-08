@@ -9,6 +9,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	DirectionMinimize = "minimize"
+	DirectionMaximize = "maximize"
+
+	BackendAnthropic = "anthropic"
+	BackendOpenAI    = "openai"
+)
+
 // Config is the top-level research configuration loaded from research.yaml.
 type Config struct {
 	Program  string         `yaml:"program"`
@@ -72,12 +80,6 @@ func (c *Config) applyDefaults() {
 	if c.Git.BranchPrefix == "" {
 		c.Git.BranchPrefix = "research/"
 	}
-	// Git enabled by default — only disabled if explicitly set to false.
-	// Since zero-value bool is false, we need the yaml tag to handle this.
-	// We use a pointer approach in applyDefaults isn't needed; the yaml
-	// decoder will set it to true if "enabled: true" is present, and leave
-	// it false if "enabled: false" or omitted. We treat omitted as true:
-	// this is handled by the default YAML template in init, not here.
 }
 
 func (c *Config) validate() error {
@@ -94,7 +96,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("eval.metric is required")
 	}
 	switch c.Eval.Direction {
-	case "minimize", "maximize":
+	case DirectionMinimize, DirectionMaximize:
 		// ok
 	case "":
 		return fmt.Errorf("eval.direction is required (minimize or maximize)")

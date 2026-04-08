@@ -5,8 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/dpoage/go-research/config"
+)
+
+const (
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+
+	BlockText       = "text"
+	BlockToolUse    = "tool_use"
+	BlockToolResult = "tool_result"
 )
 
 // Provider is the interface for LLM backends that support tool use.
@@ -28,7 +38,10 @@ type Message struct {
 	Content []ContentBlock `json:"content"`
 }
 
-// ContentBlock is a union type: text, tool_use, or tool_result.
+// ContentBlock is a union type discriminated by Type:
+//   - "text":        Text is set
+//   - "tool_use":    ID (call ID), Name, and Input are set
+//   - "tool_result": ID (matching tool_use call ID), Content, and IsError are set
 type ContentBlock struct {
 	Type    string          `json:"type"`
 	Text    string          `json:"text,omitempty"`
@@ -72,7 +85,7 @@ type Usage struct {
 func (r *Response) ToolUseBlocks() []ContentBlock {
 	var blocks []ContentBlock
 	for _, b := range r.Content {
-		if b.Type == "tool_use" {
+		if b.Type == BlockToolUse {
 			blocks = append(blocks, b)
 		}
 	}
@@ -81,21 +94,21 @@ func (r *Response) ToolUseBlocks() []ContentBlock {
 
 // TextContent returns the concatenated text from all text blocks.
 func (r *Response) TextContent() string {
-	var s string
+	var sb strings.Builder
 	for _, b := range r.Content {
-		if b.Type == "text" {
-			s += b.Text
+		if b.Type == BlockText {
+			sb.WriteString(b.Text)
 		}
 	}
-	return s
+	return sb.String()
 }
 
 // NewProvider creates a Provider from the given config.
 func NewProvider(cfg config.ProviderConfig) (Provider, error) {
 	switch cfg.Backend {
-	case "anthropic":
+	case config.BackendAnthropic:
 		return NewAnthropic(cfg)
-	case "openai":
+	case config.BackendOpenAI:
 		return nil, fmt.Errorf("openai backend not yet implemented")
 	default:
 		return nil, fmt.Errorf("unknown provider backend: %q", cfg.Backend)
@@ -107,7 +120,7 @@ func NewTextMessage(role, text string) Message {
 	return Message{
 		Role: role,
 		Content: []ContentBlock{{
-			Type: "text",
+			Type: BlockText,
 			Text: text,
 		}},
 	}
@@ -116,9 +129,9 @@ func NewTextMessage(role, text string) Message {
 // NewToolResultMessage creates a tool_result message.
 func NewToolResultMessage(toolUseID, content string, isError bool) Message {
 	return Message{
-		Role: "user",
+		Role: RoleUser,
 		Content: []ContentBlock{{
-			Type:    "tool_result",
+			Type:    BlockToolResult,
 			ID:      toolUseID,
 			Content: content,
 			IsError: isError,

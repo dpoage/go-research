@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/dpoage/go-research/config"
 )
@@ -45,17 +46,18 @@ func NewAnthropic(cfg config.ProviderConfig) (*Anthropic, error) {
 		url = cfg.URL
 	}
 
-	maxTokens := cfg.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 16384
-	}
-
 	return &Anthropic{
 		apiKey:    apiKey,
 		model:     cfg.Model,
 		url:       url,
-		maxTokens: maxTokens,
-		client:    &http.Client{},
+		maxTokens: cfg.MaxTokens,
+		client: &http.Client{
+			Timeout: 5 * time.Minute,
+			Transport: &http.Transport{
+				IdleConnTimeout:     90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
+		},
 	}, nil
 }
 
@@ -211,13 +213,13 @@ func marshalContentBlocks(blocks []ContentBlock) (json.RawMessage, error) {
 			Type: b.Type,
 		}
 		switch b.Type {
-		case "text":
+		case BlockText:
 			wb.Text = b.Text
-		case "tool_use":
+		case BlockToolUse:
 			wb.ID = b.ID
 			wb.Name = b.Name
 			wb.Input = b.Input
-		case "tool_result":
+		case BlockToolResult:
 			wb.ToolUseID = b.ID
 			wb.Content = b.Content
 			wb.IsError = b.IsError

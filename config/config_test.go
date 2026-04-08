@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -168,7 +169,7 @@ provider:
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			if got := err.Error(); !contains(got, tt.want) {
+			if got := err.Error(); !strings.Contains(got, tt.want) {
 				t.Errorf("error = %q, want substring %q", got, tt.want)
 			}
 		})
@@ -198,17 +199,4 @@ func writeTemp(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dpoage/go-research/config"
 )
@@ -103,16 +104,30 @@ func (r *Response) TextContent() string {
 	return sb.String()
 }
 
+const (
+	defaultMaxRetries = 3
+	defaultBaseDelay  = 1 * time.Second
+)
+
 // NewProvider creates a Provider from the given config.
+// The returned provider is wrapped with retry logic for transient errors.
 func NewProvider(cfg config.ProviderConfig) (Provider, error) {
+	var p Provider
+	var err error
+
 	switch cfg.Backend {
 	case config.BackendAnthropic:
-		return NewAnthropic(cfg)
+		p, err = NewAnthropic(cfg)
 	case config.BackendOpenAI:
-		return nil, fmt.Errorf("openai backend not yet implemented")
+		p, err = NewOpenAI(cfg)
 	default:
 		return nil, fmt.Errorf("unknown provider backend: %q", cfg.Backend)
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	return NewRetryProvider(p, defaultMaxRetries, defaultBaseDelay), nil
 }
 
 // NewTextMessage creates a simple text message.

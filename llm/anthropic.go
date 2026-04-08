@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"time"
 
 	"github.com/dpoage/go-research/config"
 )
@@ -29,16 +27,9 @@ type Anthropic struct {
 
 // NewAnthropic creates an Anthropic provider from the given config.
 func NewAnthropic(cfg config.ProviderConfig) (*Anthropic, error) {
-	apiKey := os.Getenv(cfg.APIKeyEnv)
-	if apiKey == "" && cfg.APIKeyEnv != "" {
-		return nil, fmt.Errorf("environment variable %s is not set", cfg.APIKeyEnv)
-	}
-	if apiKey == "" {
-		// Fall back to the standard env var.
-		apiKey = os.Getenv("ANTHROPIC_API_KEY")
-	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("no API key: set %s or ANTHROPIC_API_KEY", cfg.APIKeyEnv)
+	apiKey, err := resolveAPIKey(cfg.APIKeyEnv, "ANTHROPIC_API_KEY")
+	if err != nil {
+		return nil, err
 	}
 
 	url := defaultAnthropicURL
@@ -51,13 +42,7 @@ func NewAnthropic(cfg config.ProviderConfig) (*Anthropic, error) {
 		model:     cfg.Model,
 		url:       url,
 		maxTokens: cfg.MaxTokens,
-		client: &http.Client{
-			Timeout: 5 * time.Minute,
-			Transport: &http.Transport{
-				IdleConnTimeout:     90 * time.Second,
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
-		},
+		client:    newHTTPClient(),
 	}, nil
 }
 
@@ -159,7 +144,10 @@ func (a *Anthropic) Complete(ctx context.Context, req *Request) (*Response, erro
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("anthropic API error (status %d): %s", httpResp.StatusCode, respBody)
+		return nil, &APIError{
+			StatusCode: httpResp.StatusCode,
+			Body:       string(respBody),
+		}
 	}
 
 	var ar2 anthropicResponse

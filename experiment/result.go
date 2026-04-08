@@ -1,9 +1,11 @@
 package experiment
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,4 +86,83 @@ func (l *ResultLogger) Append(entry ResultEntry) error {
 		return fmt.Errorf("close result log: %w", closeErr)
 	}
 	return nil
+}
+
+// ResultRow is a parsed row from a results TSV file.
+type ResultRow struct {
+	Iteration int
+	Metric    float64
+	Status    Status
+	ElapsedMs int64
+	Timestamp string
+	Note      string
+}
+
+// ParseResults reads and parses a TSV results file, skipping the header line.
+func ParseResults(path string) ([]ResultRow, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var rows []ResultRow
+	scanner := bufio.NewScanner(f)
+
+	// Skip header line.
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("read results header: %w", err)
+		}
+		return rows, nil
+	}
+
+	lineNum := 1
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 5 {
+			return nil, fmt.Errorf("line %d: expected at least 5 tab-separated fields, got %d", lineNum, len(fields))
+		}
+
+		iter, err := strconv.Atoi(fields[0])
+		if err != nil {
+			return nil, fmt.Errorf("line %d: invalid iteration %q: %w", lineNum, fields[0], err)
+		}
+
+		metric, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: invalid metric %q: %w", lineNum, fields[1], err)
+		}
+
+		elapsed, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: invalid elapsed_ms %q: %w", lineNum, fields[3], err)
+		}
+
+		var note string
+		if len(fields) >= 6 {
+			note = fields[5]
+		}
+
+		rows = append(rows, ResultRow{
+			Iteration: iter,
+			Metric:    metric,
+			Status:    Status(fields[2]),
+			ElapsedMs: elapsed,
+			Timestamp: fields[4],
+			Note:      note,
+		})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read results: %w", err)
+	}
+
+	return rows, nil
 }

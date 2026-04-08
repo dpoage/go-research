@@ -1,0 +1,223 @@
+package experiment
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+
+	"github.com/dpoage/go-research/config"
+	"github.com/dpoage/go-research/llm"
+	"github.com/dpoage/go-research/tools"
+)
+
+// Loop runs the autonomous experiment cycle.
+type Loop struct {
+	Config   *config.Config
+	Provider llm.Provider
+	Executor *tools.Executor
+	Eval     *Eval
+	Git      *Git
+	Logger   *ResultLogger
+}
+
+// ToolDefs returns the tool definitions to register with the LLM.
+func ToolDefs() []llm.ToolDef {
+	return []llm.ToolDef{
+		{
+			Name:        tools.ToolReadFile,
+			Description: "Read the contents of a file.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to read"}},"required":["path"]}`),
+		},
+		{
+			Name:        tools.ToolWriteFile,
+			Description: "Write content to a file. Only allowed files may be written.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to write"},"content":{"type":"string","description":"Content to write to the file"}},"required":["path","content"]}`),
+		},
+		{
+			Name:        tools.ToolRunCommand,
+			Description: "Run a shell command and return its output.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"}},"required":["command"]}`),
+		},
+	}
+}
+
+// Run executes the experiment loop until the context is cancelled.
+// maxIter <= 0 means unlimited iterations.
+func (l *Loop) Run(ctx context.Context, maxIter int) error {
+	program, err := os.ReadFile(l.Config.Program)
+	if err != nil {
+		return fmt.Errorf("read program: %w", err)
+	}
+
+	system := string(program)
+	bestMetric := math.NaN()
+	toolDefs := ToolDefs()
+
+	for iter := 1; maxIter <= 0 || iter <= maxIter; iter++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		fmt.Printf("\n=== Iteration %d ===\n", iter)
+
+		prompt := l.buildPrompt(iter, bestMetric)
+		messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, prompt)}
+
+		// Run tool-use turns until the model stops requesting tools.
+		messages, err = l.toolLoop(ctx, system, messages, toolDefs)
+		if err != nil {
+			l.logError(iter, err)
+			continue
+		}
+
+		// Evaluate.
+		fmt.Println("Running evaluation...")
+		result := l.Eval.Run(ctx)
+		if result.Error != nil {
+			fmt.Printf("Eval error: %v\n", result.Error)
+			l.revert(iter)
+			l.logError(iter, result.Error)
+			continue
+		}
+
+		fmt.Printf("Metric: %.6f (elapsed: %s)\n", result.Metric, result.Elapsed)
+
+		// Decide keep/discard.
+		if l.isBetter(result.Metric, bestMetric) {
+			fmt.Printf("Improvement! (previous best: %v)\n", formatMetric(bestMetric))
+			bestMetric = result.Metric
+
+			// Log before commit so the results file is included in the snapshot.
+			l.logResult(iter, result, StatusKeep, "")
+
+			if err := l.Git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric)); err != nil {
+				fmt.Printf("Warning: git commit failed: %v\n", err)
+			}
+		} else {
+			fmt.Printf("No improvement (best: %v). Reverting.\n", formatMetric(bestMetric))
+			l.revert(iter)
+			// Log after revert so the entry isn't reverted with the code changes.
+			l.logResult(iter, result, StatusDiscard, fmt.Sprintf("best=%.6f", bestMetric))
+		}
+	}
+
+	fmt.Printf("\nDone. Best metric: %v\n", formatMetric(bestMetric))
+	return nil
+}
+
+func (l *Loop) buildPrompt(iter int, bestMetric float64) string {
+	prompt := fmt.Sprintf("Iteration %d.\n\nAllowed files: %v\nEval command: %s\nDirection: %s\n",
+		iter, l.Config.Files, l.Config.Eval.Command, l.Config.Eval.Direction)
+
+	if !math.IsNaN(bestMetric) {
+		prompt += fmt.Sprintf("Current best metric: %.6f\n", bestMetric)
+	}
+	prompt += "\nPropose and apply your next experiment. Use the tools to read and modify files."
+	return prompt
+}
+
+// toolLoop runs LLM completion in a loop, dispatching tool calls until the model
+// returns end_turn or we hit max rounds.
+func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Message, toolDefs []llm.ToolDef) ([]llm.Message, error) {
+	const maxRounds = 20
+
+	for round := range maxRounds {
+		if ctx.Err() != nil {
+			return messages, ctx.Err()
+		}
+
+		resp, err := l.Provider.Complete(ctx, &llm.Request{
+			System:    system,
+			Messages:  messages,
+			Tools:     toolDefs,
+			MaxTokens: l.Config.Provider.MaxTokens,
+		})
+		if err != nil {
+			return messages, fmt.Errorf("LLM completion (round %d): %w", round+1, err)
+		}
+
+		// Append assistant response.
+		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Content})
+
+		if text := resp.TextContent(); text != "" {
+			fmt.Printf("Agent: %s\n", text)
+		}
+
+		toolCalls := resp.ToolUseBlocks()
+		if len(toolCalls) == 0 || resp.StopReason == llm.StopEndTurn {
+			return messages, nil
+		}
+
+		// Dispatch each tool call and build result messages.
+		for _, tc := range toolCalls {
+			result := l.Executor.Dispatch(ctx, tc.Name, tc.Input)
+
+			// Truncate long output to avoid blowing context.
+			output := result.Output
+			const maxOutput = 16000
+			if len(output) > maxOutput {
+				output = output[:maxOutput] + "\n... (truncated)"
+			}
+
+			fmt.Printf("Tool %s: %s\n", tc.Name, truncateDisplay(output, 200))
+			messages = append(messages, llm.NewToolResultMessage(tc.ID, output, result.IsError))
+		}
+	}
+
+	return messages, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+}
+
+func (l *Loop) isBetter(current, best float64) bool {
+	if math.IsNaN(best) {
+		return true
+	}
+	if l.Config.Eval.Direction == config.DirectionMinimize {
+		return current < best
+	}
+	return current > best
+}
+
+func (l *Loop) revert(iter int) {
+	if err := l.Git.Revert(); err != nil {
+		fmt.Printf("Warning: revert failed (iter %d): %v\n", iter, err)
+	}
+}
+
+func (l *Loop) logResult(iter int, result EvalResult, status Status, note string) {
+	if err := l.Logger.Append(ResultEntry{
+		Iteration: iter,
+		Metric:    result.Metric,
+		Status:    status,
+		Elapsed:   result.Elapsed,
+		Note:      note,
+	}); err != nil {
+		fmt.Printf("Warning: log result failed: %v\n", err)
+	}
+}
+
+func (l *Loop) logError(iter int, err error) {
+	fmt.Printf("Error in iteration %d: %v\n", iter, err)
+	if logErr := l.Logger.Append(ResultEntry{
+		Iteration: iter,
+		Status:    StatusError,
+		Note:      err.Error(),
+	}); logErr != nil {
+		fmt.Printf("Warning: log error failed: %v\n", logErr)
+	}
+}
+
+func formatMetric(v float64) string {
+	if math.IsNaN(v) {
+		return "none"
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
+func truncateDisplay(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}

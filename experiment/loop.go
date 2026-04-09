@@ -16,6 +16,17 @@ import (
 // to avoid blowing the context window.
 const maxToolOutput = 16000
 
+// maxConsecutiveErrors is the number of consecutive iteration errors before
+// the experiment loop aborts (circuit breaker).
+const maxConsecutiveErrors = 3
+
+// iterOutcome summarizes what happened in the previous iteration,
+// so the model has context for its next attempt.
+type iterOutcome struct {
+	Metric float64
+	Status Status
+}
+
 // LoopParams holds the dependencies for an experiment Loop.
 type LoopParams struct {
 	Config   *config.Config
@@ -83,6 +94,8 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 	system := string(program)
 	bestMetric := math.NaN()
 	toolDefs := ToolDefs()
+	consecutiveErrors := 0
+	var lastResult *iterOutcome
 
 	for iter := 1; maxIter <= 0 || iter <= maxIter; iter++ {
 		if ctx.Err() != nil {
@@ -91,7 +104,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 		l.observer.IterationStart(iter, maxIter)
 
-		prompt := l.buildPrompt(iter, bestMetric)
+		prompt := l.buildPrompt(iter, bestMetric, lastResult)
 		messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, prompt)}
 
 		// Run tool-use turns until the model stops requesting tools.
@@ -99,6 +112,11 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 		if err != nil {
 			l.observer.IterationError(iter, err)
 			l.logResult(iter, EvalResult{Error: err}, StatusError, err.Error())
+			lastResult = &iterOutcome{Status: StatusError}
+			consecutiveErrors++
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive errors: %w", consecutiveErrors, err)
+			}
 			continue
 		}
 
@@ -109,8 +127,15 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			l.observer.IterationError(iter, result.Error)
 			l.revert(iter)
 			l.logResult(iter, result, StatusError, result.Error.Error())
+			lastResult = &iterOutcome{Status: StatusError}
+			consecutiveErrors++
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive errors: %w", consecutiveErrors, result.Error)
+			}
 			continue
 		}
+
+		consecutiveErrors = 0
 
 		l.observer.EvalResult(iter, result.Metric, result.Elapsed)
 
@@ -121,6 +146,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 			// Log before commit so the results file is included in the snapshot.
 			l.logResult(iter, result, StatusKeep, "")
+			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusKeep}
 
 			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.logger.Path()); err != nil {
 				l.observer.Warning(fmt.Sprintf("git commit failed: %v", err))
@@ -130,6 +156,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			l.revert(iter)
 			// Log after revert so the entry isn't reverted with the code changes.
 			l.logResult(iter, result, StatusDiscard, fmt.Sprintf("best=%.6f", bestMetric))
+			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusDiscard}
 		}
 	}
 
@@ -137,21 +164,38 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 	return nil
 }
 
-func (l *Loop) buildPrompt(iter int, bestMetric float64) string {
+func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) string {
 	prompt := fmt.Sprintf("Iteration %d.\n\nAllowed files: %v\nEval command: %s\nDirection: %v\n",
 		iter, l.config.Files, l.config.Eval.Command, l.config.Eval.Direction)
 
 	if !math.IsNaN(bestMetric) {
 		prompt += fmt.Sprintf("Current best metric: %.6f\n", bestMetric)
 	}
-	prompt += "\nPropose and apply your next experiment. Use the tools to read and modify files."
+
+	if last != nil {
+		switch last.Status {
+		case StatusKeep:
+			prompt += fmt.Sprintf("Last iteration: kept (metric=%.6f). Try a different improvement.\n", last.Metric)
+		case StatusDiscard:
+			prompt += fmt.Sprintf("Last iteration: discarded (metric=%.6f). That approach didn't help — try something else.\n", last.Metric)
+		case StatusError:
+			prompt += "Last iteration: error. Try a different approach.\n"
+		}
+	}
+
+	prompt += `
+Make exactly ONE focused change per iteration.
+After writing your change, stop — the eval runs automatically.
+Do not read files you have already read in this iteration.
+Do not verify or re-read files after writing them.`
 	return prompt
 }
 
 // toolLoop runs LLM completion in a loop, dispatching tool calls until the model
 // returns end_turn or we hit max rounds.
 func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Message, toolDefs []llm.ToolDef) ([]llm.Message, error) {
-	const maxRounds = 20
+	maxRounds := l.config.Provider.MaxRounds
+	hasWritten := false
 
 	for round := range maxRounds {
 		if ctx.Err() != nil {
@@ -181,7 +225,12 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 		}
 
 		// Dispatch each tool call and build result messages.
+		wroteThisRound := false
 		for _, tc := range toolCalls {
+			if tc.Name == tools.ToolWriteFile {
+				wroteThisRound = true
+			}
+
 			result := l.executor.Dispatch(ctx, tc.Name, tc.Input)
 
 			// Truncate long output to avoid blowing context.
@@ -192,6 +241,15 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 
 			l.observer.ToolCall(tc.Name, output)
 			messages = append(messages, llm.NewToolResultMessage(tc.ID, output, result.IsError))
+		}
+
+		// If the model previously wrote a file and this round had no writes,
+		// it is just verifying — exit the tool loop.
+		if hasWritten && !wroteThisRound {
+			return messages, nil
+		}
+		if wroteThisRound {
+			hasWritten = true
 		}
 	}
 

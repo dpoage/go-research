@@ -188,13 +188,16 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 
 	prompt += `
 
+After you call done, the harness evaluates your change against the current best metric. If the metric improved, your change is kept. If not, it is reverted entirely. You then get another iteration to try a different approach.
+
+Bundling multiple changes in one turn risks reverting good work along with bad. Keep each iteration focused so the harness can isolate what works.
+
 Steps:
 1. Read the files you need to understand the current state.
-2. Make one focused improvement.
-3. Optionally run a quick test to verify your change.
-4. Call done with a summary of what you changed.
+2. Make one focused change.
+3. Call done with a summary of what you changed.
 
-Your turn has a round limit. If you do not call done, the eval runs on whatever file state you left — incomplete changes will likely be discarded.`
+Your turn has a round limit — if you do not call done, the eval runs on whatever file state you left.`
 	return prompt
 }
 

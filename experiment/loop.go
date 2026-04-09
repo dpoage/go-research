@@ -113,9 +113,8 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			l.observer.IterationError(iter, err)
 			l.logResult(iter, EvalResult{Error: err}, StatusError, err.Error())
 			lastResult = &iterOutcome{Status: StatusError}
-			consecutiveErrors++
-			if consecutiveErrors >= maxConsecutiveErrors {
-				return fmt.Errorf("aborting after %d consecutive errors: %w", consecutiveErrors, err)
+			if abortErr := l.checkCircuitBreaker(&consecutiveErrors, err); abortErr != nil {
+				return abortErr
 			}
 			continue
 		}
@@ -128,9 +127,8 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			l.revert(iter)
 			l.logResult(iter, result, StatusError, result.Error.Error())
 			lastResult = &iterOutcome{Status: StatusError}
-			consecutiveErrors++
-			if consecutiveErrors >= maxConsecutiveErrors {
-				return fmt.Errorf("aborting after %d consecutive errors: %w", consecutiveErrors, result.Error)
+			if abortErr := l.checkCircuitBreaker(&consecutiveErrors, result.Error); abortErr != nil {
+				return abortErr
 			}
 			continue
 		}
@@ -226,9 +224,13 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 
 		// Dispatch each tool call and build result messages.
 		wroteThisRound := false
+		readOnly := true
 		for _, tc := range toolCalls {
 			if tc.Name == tools.ToolWriteFile {
 				wroteThisRound = true
+				readOnly = false
+			} else if tc.Name != tools.ToolReadFile {
+				readOnly = false
 			}
 
 			result := l.executor.Dispatch(ctx, tc.Name, tc.Input)
@@ -243,9 +245,9 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			messages = append(messages, llm.NewToolResultMessage(tc.ID, output, result.IsError))
 		}
 
-		// If the model previously wrote a file and this round had no writes,
+		// If the model previously wrote a file and this round only reads,
 		// it is just verifying — exit the tool loop.
-		if hasWritten && !wroteThisRound {
+		if hasWritten && readOnly {
 			return messages, nil
 		}
 		if wroteThisRound {
@@ -254,6 +256,16 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 	}
 
 	return messages, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+}
+
+// checkCircuitBreaker increments the consecutive error counter and returns
+// a non-nil error if the threshold is reached.
+func (l *Loop) checkCircuitBreaker(consecutiveErrors *int, err error) error {
+	*consecutiveErrors++
+	if *consecutiveErrors >= maxConsecutiveErrors {
+		return fmt.Errorf("aborting after %d consecutive errors: %w", *consecutiveErrors, err)
+	}
+	return nil
 }
 
 func (l *Loop) isBetter(current, best float64) bool {

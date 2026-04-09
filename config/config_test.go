@@ -81,6 +81,9 @@ provider:
 	if cfg.Git.BranchPrefix != "research/" {
 		t.Errorf("default branch_prefix = %q, want %q", cfg.Git.BranchPrefix, "research/")
 	}
+	if cfg.Provider.MaxRounds != DefaultMaxRounds {
+		t.Errorf("default max_rounds = %d, want %d", cfg.Provider.MaxRounds, DefaultMaxRounds)
+	}
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {

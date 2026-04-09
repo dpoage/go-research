@@ -11,6 +11,7 @@ import (
 )
 
 const DefaultMaxTokens = 16384
+const DefaultMaxRounds = 20
 
 // Config is the top-level research configuration loaded from research.yaml.
 type Config struct {
@@ -37,6 +38,7 @@ type ProviderConfig struct {
 	URL       string  `yaml:"url"`
 	APIKeyEnv string  `yaml:"api_key_env"`
 	MaxTokens int     `yaml:"max_tokens"`
+	MaxRounds int     `yaml:"max_rounds"`
 }
 
 // GitConfig controls git integration for experiment tracking.
@@ -73,6 +75,9 @@ func (c *Config) applyDefaults() {
 	if c.Provider.MaxTokens == 0 {
 		c.Provider.MaxTokens = DefaultMaxTokens
 	}
+	if c.Provider.MaxRounds == 0 {
+		c.Provider.MaxRounds = DefaultMaxRounds
+	}
 	if c.Git.BranchPrefix == "" {
 		c.Git.BranchPrefix = "research/"
 	}
@@ -102,6 +107,9 @@ func (c *Config) validate() error {
 	}
 	if c.Provider.Model == "" {
 		return fmt.Errorf("provider.model is required")
+	}
+	if c.Provider.MaxRounds < 1 {
+		return fmt.Errorf("provider.max_rounds must be at least 1")
 	}
 	if c.Eval.Source.IsFile() && strings.HasPrefix(c.Eval.Metric, sourceFilePrefix) {
 		return fmt.Errorf("eval.source and eval.metric cannot both use %q prefix", sourceFilePrefix)

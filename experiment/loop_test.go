@@ -88,6 +88,7 @@ func TestLoop_EndToEnd(t *testing.T) {
 			Backend:   config.BackendAnthropic,
 			Model:     "test",
 			MaxTokens: 1024,
+			MaxRounds: config.DefaultMaxRounds,
 		},
 		Git: config.GitConfig{
 			Enabled:      true,
@@ -231,7 +232,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -285,7 +286,7 @@ func TestLoop_Run_ProgramReadError(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -350,7 +351,7 @@ func TestLoop_IsBetter_Maximize(t *testing.T) {
 			Direction: config.DirectionMaximize, // maximize: higher is better
 			Timeout:   config.Duration{Duration: 10 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -463,7 +464,7 @@ func TestLoop_Revert_WarnsOnError(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -556,7 +557,7 @@ func TestLoop_LogResult_WarnsOnError(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -644,7 +645,7 @@ func TestLoop_ToolLoop_ProviderError(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -726,7 +727,7 @@ func TestLoop_ToolLoop_ExceedsMaxRounds(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -817,7 +818,7 @@ func TestLoop_ToolLoop_ContextCancelledDuringToolRound(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -901,7 +902,7 @@ func TestLoop_Run_EvalError(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -986,7 +987,7 @@ func TestLoop_ToolLoop_TruncatesLongOutput(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -1115,7 +1116,7 @@ func TestLoop_ToolLoop_ContextCancelledBetweenRounds(t *testing.T) {
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},
-		Provider: config.ProviderConfig{MaxTokens: 1024},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: config.DefaultMaxRounds},
 		Git:      config.GitConfig{Enabled: false},
 	}
 
@@ -1164,8 +1165,8 @@ func TestLoop_ToolLoop_ContextCancelledBetweenRounds(t *testing.T) {
 
 func TestToolDefs(t *testing.T) {
 	defs := ToolDefs()
-	if len(defs) != 3 {
-		t.Fatalf("expected 3 tool defs, got %d", len(defs))
+	if len(defs) != 4 {
+		t.Fatalf("expected 4 tool defs, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -1178,9 +1179,417 @@ func TestToolDefs(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolRunCommand} {
+	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolRunCommand, tools.ToolDone} {
 		if !names[expected] {
 			t.Errorf("missing tool def: %s", expected)
 		}
+	}
+}
+
+func TestLoop_ToolLoop_DoneToolExit(t *testing.T) {
+	// The tool loop should exit when the model calls the done tool.
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	programPath := filepath.Join(dir, "program.md")
+	if err := os.WriteFile(programPath, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	counterPath := filepath.Join(dir, "counter.txt")
+	if err := os.WriteFile(counterPath, []byte("1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   "echo 'metric: 1'",
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, err := NewResultLogger(resultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Round 0: write_file
+	// Round 1: write_file + done (batched — both dispatched, then loop exits)
+	// Round 2: should never be reached
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "call_1",
+					Name:  tools.ToolWriteFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"2"}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{
+					{
+						Type:  llm.BlockToolUse,
+						ID:    "call_2",
+						Name:  tools.ToolWriteFile,
+						Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"0"}`, counterPath)),
+					},
+					{
+						Type:  llm.BlockToolUse,
+						ID:    "call_3",
+						Name:  tools.ToolDone,
+						Input: json.RawMessage(`{"summary":"lowered counter"}`),
+					},
+				},
+				StopReason: llm.StopToolUse,
+			},
+			// This should NOT be reached.
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "call_4",
+					Name:  tools.ToolReadFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+		},
+	}
+
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: VerboseObserver{},
+	})
+
+	if err := loop.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Provider should have been called exactly 2 times (write round + write+done round).
+	if provider.calls != 2 {
+		t.Errorf("expected 2 provider calls (done tool exit), got %d", provider.calls)
+	}
+
+	// The write in the done round should have been dispatched before exiting.
+	data, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "0" {
+		t.Errorf("expected counter to be '0' (write dispatched before done), got %q", string(data))
+	}
+}
+
+func TestLoop_ToolLoop_CustomMaxRounds(t *testing.T) {
+	// Verify that a custom MaxRounds value is respected.
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	programPath := filepath.Join(dir, "program.md")
+	if err := os.WriteFile(programPath, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	counterPath := filepath.Join(dir, "counter.txt")
+	if err := os.WriteFile(counterPath, []byte("1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   "echo 'metric: 1'",
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 3},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, err := NewResultLogger(resultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Build 4 responses that all request reads (to exceed MaxRounds=3).
+	var responses []*llm.Response
+	for i := 0; i < 4; i++ {
+		responses = append(responses, &llm.Response{
+			Content: []llm.ContentBlock{{
+				Type:  llm.BlockToolUse,
+				ID:    fmt.Sprintf("call_%d", i),
+				Name:  tools.ToolReadFile,
+				Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+			}},
+			StopReason: llm.StopToolUse,
+		})
+	}
+
+	provider := &mockProvider{responses: responses}
+
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: VerboseObserver{},
+	})
+
+	if err := loop.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have logged an error about exceeding 3 rounds.
+	data, err := os.ReadFile(resultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "error") {
+		t.Errorf("expected 'error' status for exceeded custom max rounds, got:\n%s", data)
+	}
+	if !strings.Contains(string(data), "3 rounds") {
+		t.Errorf("expected error to mention '3 rounds', got:\n%s", data)
+	}
+}
+
+func TestLoop_CircuitBreaker(t *testing.T) {
+	// Verify that Run() aborts after maxConsecutiveErrors consecutive failures.
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	programPath := filepath.Join(dir, "program.md")
+	if err := os.WriteFile(programPath, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	counterPath := filepath.Join(dir, "counter.txt")
+	if err := os.WriteFile(counterPath, []byte("1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   "echo 'metric: 1'",
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, err := NewResultLogger(resultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// All calls return errors — should trigger circuit breaker after 3.
+	provider := &mockProvider{
+		responses: make([]*llm.Response, 10),
+		errs: []error{
+			fmt.Errorf("provider error 1"),
+			fmt.Errorf("provider error 2"),
+			fmt.Errorf("provider error 3"),
+			fmt.Errorf("provider error 4"),
+		},
+	}
+
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: VerboseObserver{},
+	})
+
+	// Run with maxIter=10 — should abort after 3 consecutive errors, not run all 10.
+	err = loop.Run(context.Background(), 10)
+	if err == nil {
+		t.Fatal("expected circuit breaker error, got nil")
+	}
+	if !strings.Contains(err.Error(), "aborting after 3 consecutive errors") {
+		t.Errorf("expected circuit breaker message, got: %v", err)
+	}
+
+	// Should have only attempted 3 iterations, not 10.
+	if provider.calls != 3 {
+		t.Errorf("expected 3 provider calls before circuit breaker, got %d", provider.calls)
+	}
+}
+
+func TestLoop_CircuitBreaker_ResetsOnSuccess(t *testing.T) {
+	// Verify that a successful iteration resets the consecutive error counter.
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	programPath := filepath.Join(dir, "program.md")
+	if err := os.WriteFile(programPath, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	counterPath := filepath.Join(dir, "counter.txt")
+	if err := os.WriteFile(counterPath, []byte("10"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	evalScript := filepath.Join(dir, "eval.sh")
+	if err := os.WriteFile(evalScript, []byte("#!/bin/sh\necho \"metric: $(cat counter.txt)\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   "sh " + evalScript,
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, err := NewResultLogger(resultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Pattern: error, error, success (write 5), error, error.
+	// The success in the middle resets the counter, so we never hit 3 consecutive.
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			nil, // error 1
+			nil, // error 2
+			// Iter 3: successful write
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "call_1",
+					Name:  tools.ToolWriteFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"5"}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content:    []llm.ContentBlock{{Type: llm.BlockText, Text: "done"}},
+				StopReason: llm.StopEndTurn,
+			},
+			nil, // error 4
+			nil, // error 5
+		},
+		errs: []error{
+			fmt.Errorf("error 1"),
+			fmt.Errorf("error 2"),
+			nil, // success
+			nil, // success (end turn)
+			fmt.Errorf("error 4"),
+			fmt.Errorf("error 5"),
+		},
+	}
+
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: VerboseObserver{},
+	})
+
+	// Run 5 iterations. Should complete without circuit breaker since errors are
+	// never 3 consecutive (reset by the success in iter 3).
+	err = loop.Run(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("expected no circuit breaker error, got: %v", err)
 	}
 }

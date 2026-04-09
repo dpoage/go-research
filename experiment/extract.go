@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-// MetricExtractor extracts a numeric metric from eval command output.
+// MetricExtractor extracts a numeric metric from text.
+// Source wrappers (e.g. FileSource) may ignore the output parameter
+// and read from an alternate source instead.
 type MetricExtractor interface {
 	Extract(output string) (float64, error)
 }

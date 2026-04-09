@@ -6,8 +6,9 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"strings"
 	"time"
+
+	"github.com/dpoage/go-research/config"
 )
 
 // Eval runs an evaluation command and extracts a numeric metric from its output.
@@ -18,41 +19,25 @@ type Eval struct {
 }
 
 // NewEval creates an Eval from the config fields.
-// The metricPattern is parsed by NewExtractor to select the appropriate backend.
-// The source parameter controls where the extractor reads text from:
-// "" or "stdout" reads from command output; "file:<path>" reads from a file.
-func NewEval(command, metricPattern, source string, timeout time.Duration) (*Eval, error) {
-	ext, err := NewExtractor(metricPattern)
+func NewEval(cfg config.EvalConfig) (*Eval, error) {
+	ext, err := NewExtractor(cfg.Metric)
 	if err != nil {
 		return nil, err
 	}
 
-	ext, err = applySource(ext, source)
+	kind, path, err := config.ParseSource(cfg.Source)
 	if err != nil {
 		return nil, err
+	}
+	if kind == "file" {
+		ext = NewFileSourceFromParts(path, ext)
 	}
 
 	return &Eval{
-		Command:   command,
+		Command:   cfg.Command,
 		Extractor: ext,
-		Timeout:   timeout,
+		Timeout:   cfg.Timeout.Duration,
 	}, nil
-}
-
-// applySource wraps the extractor based on the source specification.
-func applySource(ext MetricExtractor, source string) (MetricExtractor, error) {
-	switch {
-	case source == "" || source == "stdout":
-		return ext, nil
-	case strings.HasPrefix(source, "file:"):
-		path := source[5:]
-		if path == "" {
-			return nil, fmt.Errorf("file source requires a path")
-		}
-		return NewFileSourceFromParts(path, ext), nil
-	default:
-		return nil, fmt.Errorf("unknown source %q (expected stdout or file:<path>)", source)
-	}
 }
 
 // EvalResult holds the outcome of a single evaluation run.

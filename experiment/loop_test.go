@@ -95,7 +95,7 @@ func TestLoop_EndToEnd(t *testing.T) {
 	}
 	executor := tools.NewExecutor(sandbox, 10*time.Second)
 
-	eval, err := NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Source, cfg.Eval.Timeout.Duration)
+	eval, err := NewEval(cfg.Eval)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 
 	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
 	executor := tools.NewExecutor(sandbox, 5*time.Second)
-	eval, _ := NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Source, cfg.Eval.Timeout.Duration)
+	eval, _ := NewEval(cfg.Eval)
 	git := NewGit(false, dir, nil)
 	resultsPath := filepath.Join(dir, "results.tsv")
 	logger, _ := NewResultLogger(resultsPath)

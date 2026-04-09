@@ -224,6 +224,30 @@ provider:
 	}
 }
 
+func TestLoad_DoubleFileSourceAndMetric(t *testing.T) {
+	yaml := `
+program: program.md
+files: [main.go]
+eval:
+  command: "go test ./..."
+  metric: 'file:a.json:jq:.loss'
+  source: "file:b.json"
+  direction: maximize
+provider:
+  backend: anthropic
+  model: claude-sonnet-4-20250514
+`
+	path := writeTemp(t, yaml)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for double file: in source and metric")
+	}
+	if got := err.Error(); !strings.Contains(got, "cannot both") {
+		t.Errorf("error = %q, want substring %q", got, "cannot both")
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/research.yaml")
 	if err == nil {

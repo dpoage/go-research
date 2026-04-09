@@ -17,8 +17,28 @@ const (
 	BackendAnthropic = "anthropic"
 	BackendOpenAI    = "openai"
 
+	SourceStdout     = "stdout"
+	SourceFilePrefix = "file:"
+
 	DefaultMaxTokens = 16384
 )
+
+// ParseSource classifies an eval.source value.
+// Returns kind ("stdout" or "file") and path (non-empty only for "file").
+func ParseSource(source string) (kind, path string, err error) {
+	switch {
+	case source == "" || source == SourceStdout:
+		return SourceStdout, "", nil
+	case strings.HasPrefix(source, SourceFilePrefix):
+		p := strings.TrimPrefix(source, SourceFilePrefix)
+		if p == "" {
+			return "", "", fmt.Errorf("file source requires a path")
+		}
+		return "file", p, nil
+	default:
+		return "", "", fmt.Errorf("eval.source must be %q or %q<path>, got %q", SourceStdout, SourceFilePrefix, source)
+	}
+}
 
 // Config is the top-level research configuration loaded from research.yaml.
 type Config struct {
@@ -107,11 +127,11 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("eval.direction must be 'minimize' or 'maximize', got %q", c.Eval.Direction)
 	}
-	switch {
-	case c.Eval.Source == "", c.Eval.Source == "stdout", strings.HasPrefix(c.Eval.Source, "file:"):
-		// ok
-	default:
-		return fmt.Errorf("eval.source must be empty, \"stdout\", or \"file:<path>\", got %q", c.Eval.Source)
+	if _, _, err := ParseSource(c.Eval.Source); err != nil {
+		return err
+	}
+	if strings.HasPrefix(c.Eval.Source, SourceFilePrefix) && strings.HasPrefix(c.Eval.Metric, SourceFilePrefix) {
+		return fmt.Errorf("eval.source and eval.metric cannot both use %q prefix", SourceFilePrefix)
 	}
 	if c.Provider.Backend == "" {
 		return fmt.Errorf("provider.backend is required")

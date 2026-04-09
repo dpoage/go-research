@@ -75,7 +75,7 @@ func TestLoop_EndToEnd(t *testing.T) {
 		Eval: config.EvalConfig{
 			Command:   "sh " + evalScript,
 			Metric:    `metric:\s+(\d+)`,
-			Source:    config.SourceStdout,
+			Source:    config.NewSourceStdout(),
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 10 * time.Second},
 		},
@@ -214,7 +214,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		Eval: config.EvalConfig{
 			Command:   "echo 'metric: 1'",
 			Metric:    `metric:\s+(\d+)`,
-			Source:    config.SourceStdout,
+			Source:    config.NewSourceStdout(),
 			Direction: config.DirectionMinimize,
 			Timeout:   config.Duration{Duration: 5 * time.Second},
 		},

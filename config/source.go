@@ -9,14 +9,29 @@ import (
 
 const sourceFilePrefix = "file:"
 
+// SourceKind distinguishes the eval output source.
+type SourceKind string
+
+const (
+	SourceKindStdout SourceKind = "stdout"
+	SourceKindFile   SourceKind = "file"
+)
+
 // Source represents a parsed eval source — either stdout or a file path.
 type Source struct {
-	Kind string // "stdout" or "file"
-	Path string // non-empty only when Kind == "file"
+	Kind SourceKind // SourceKindStdout or SourceKindFile
+	Path string     // non-empty only when Kind == SourceKindFile
 }
 
-// SourceStdout is the default source that reads from command stdout.
-var SourceStdout = Source{Kind: "stdout"}
+// NewSourceStdout returns the default source that reads from command stdout.
+func NewSourceStdout() Source {
+	return Source{Kind: SourceKindStdout}
+}
+
+// NewSourceFile returns a source that reads from the given file path.
+func NewSourceFile(path string) Source {
+	return Source{Kind: SourceKindFile, Path: path}
+}
 
 // UnmarshalYAML parses the source value at YAML load time.
 // Accepts "", "stdout", or "file:<path>".
@@ -35,37 +50,34 @@ func (s *Source) UnmarshalYAML(value *yaml.Node) error {
 
 // MarshalYAML writes the source back to YAML.
 func (s Source) MarshalYAML() (any, error) {
-	if s.Kind == "file" {
-		return sourceFilePrefix + s.Path, nil
-	}
-	return s.Kind, nil
+	return s.String(), nil
 }
 
 // IsFile returns true when the source reads from a file.
 func (s Source) IsFile() bool {
-	return s.Kind == "file"
+	return s.Kind == SourceKindFile
 }
 
 // String returns the canonical string representation.
 func (s Source) String() string {
-	if s.Kind == "file" {
+	if s.Kind == SourceKindFile {
 		return sourceFilePrefix + s.Path
 	}
-	return "stdout"
+	return string(SourceKindStdout)
 }
 
 // parseSource classifies a raw source string.
 func parseSource(raw string) (Source, error) {
 	switch {
-	case raw == "" || raw == "stdout":
-		return Source{Kind: "stdout"}, nil
+	case raw == "" || raw == string(SourceKindStdout):
+		return NewSourceStdout(), nil
 	case strings.HasPrefix(raw, sourceFilePrefix):
-		p := strings.TrimPrefix(raw, sourceFilePrefix)
-		if p == "" {
+		p, ok := strings.CutPrefix(raw, sourceFilePrefix)
+		if !ok || p == "" {
 			return Source{}, fmt.Errorf("file source requires a path")
 		}
-		return Source{Kind: "file", Path: p}, nil
+		return NewSourceFile(p), nil
 	default:
-		return Source{}, fmt.Errorf("eval.source must be %q or %q<path>, got %q", "stdout", sourceFilePrefix, raw)
+		return Source{}, fmt.Errorf("eval.source must be %q or %q<path>, got %q", SourceKindStdout, sourceFilePrefix, raw)
 	}
 }

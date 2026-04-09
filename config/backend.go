@@ -29,6 +29,16 @@ func (b *Backend) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// Valid returns true if the backend is a recognized value.
+func (b Backend) Valid() bool {
+	switch b {
+	case BackendAnthropic, BackendOpenAI:
+		return true
+	default:
+		return false
+	}
+}
+
 // String returns the backend as a string.
 func (b Backend) String() string {
 	return string(b)

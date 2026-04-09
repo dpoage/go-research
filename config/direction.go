@@ -29,6 +29,16 @@ func (d *Direction) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// Valid returns true if the direction is a recognized value.
+func (d Direction) Valid() bool {
+	switch d {
+	case DirectionMinimize, DirectionMaximize:
+		return true
+	default:
+		return false
+	}
+}
+
 // String returns the direction as a string.
 func (d Direction) String() string {
 	return string(d)

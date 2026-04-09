@@ -158,7 +158,7 @@ eval:
 provider:
   model: claude-sonnet-4-20250514
 `,
-			want: "provider.backend is required",
+			want: "provider.backend must be",
 		},
 	}
 

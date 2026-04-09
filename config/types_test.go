@@ -47,6 +47,21 @@ func TestDirection_String(t *testing.T) {
 	}
 }
 
+func TestDirection_Valid(t *testing.T) {
+	if !DirectionMinimize.Valid() {
+		t.Error("minimize should be valid")
+	}
+	if !DirectionMaximize.Valid() {
+		t.Error("maximize should be valid")
+	}
+	if Direction("").Valid() {
+		t.Error("empty should be invalid")
+	}
+	if Direction("sideways").Valid() {
+		t.Error("sideways should be invalid")
+	}
+}
+
 func TestBackend_UnmarshalYAML(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -56,7 +71,7 @@ func TestBackend_UnmarshalYAML(t *testing.T) {
 	}{
 		{name: "anthropic", input: `"anthropic"`, want: BackendAnthropic},
 		{name: "openai", input: `"openai"`, want: BackendOpenAI},
-		{name: "invalid", input: `"gemini"`, wantErr: true},
+		{name: "invalid", input: `"unknown"`, wantErr: true},
 		{name: "empty", input: `""`, wantErr: true},
 	}
 	for _, tt := range tests {
@@ -88,6 +103,21 @@ func TestBackend_String(t *testing.T) {
 	}
 }
 
+func TestBackend_Valid(t *testing.T) {
+	if !BackendAnthropic.Valid() {
+		t.Error("anthropic should be valid")
+	}
+	if !BackendOpenAI.Valid() {
+		t.Error("openai should be valid")
+	}
+	if Backend("").Valid() {
+		t.Error("empty should be invalid")
+	}
+	if Backend("unknown").Valid() {
+		t.Error("unknown should be invalid")
+	}
+}
+
 func TestSource_UnmarshalYAML(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -95,9 +125,9 @@ func TestSource_UnmarshalYAML(t *testing.T) {
 		want    Source
 		wantErr bool
 	}{
-		{name: "stdout explicit", input: `"stdout"`, want: Source{Kind: "stdout"}},
-		{name: "empty defaults stdout", input: `""`, want: Source{Kind: "stdout"}},
-		{name: "file with path", input: `"file:results.json"`, want: Source{Kind: "file", Path: "results.json"}},
+		{name: "stdout explicit", input: `"stdout"`, want: NewSourceStdout()},
+		{name: "empty defaults stdout", input: `""`, want: NewSourceStdout()},
+		{name: "file with path", input: `"file:results.json"`, want: NewSourceFile("results.json")},
 		{name: "file missing path", input: `"file:"`, wantErr: true},
 		{name: "unknown scheme", input: `"ftp:somewhere"`, wantErr: true},
 	}
@@ -122,22 +152,20 @@ func TestSource_UnmarshalYAML(t *testing.T) {
 }
 
 func TestSource_IsFile(t *testing.T) {
-	if SourceStdout.IsFile() {
+	if NewSourceStdout().IsFile() {
 		t.Error("stdout should not be file")
 	}
-	s := Source{Kind: "file", Path: "out.json"}
-	if !s.IsFile() {
+	if !NewSourceFile("out.json").IsFile() {
 		t.Error("file source should be file")
 	}
 }
 
 func TestSource_String(t *testing.T) {
-	if SourceStdout.String() != "stdout" {
-		t.Errorf("got %q", SourceStdout.String())
+	if NewSourceStdout().String() != "stdout" {
+		t.Errorf("got %q", NewSourceStdout().String())
 	}
-	s := Source{Kind: "file", Path: "out.json"}
-	if s.String() != "file:out.json" {
-		t.Errorf("got %q", s.String())
+	if NewSourceFile("out.json").String() != "file:out.json" {
+		t.Errorf("got %q", NewSourceFile("out.json").String())
 	}
 }
 
@@ -147,8 +175,8 @@ func TestSource_MarshalYAML(t *testing.T) {
 		src  Source
 		want string
 	}{
-		{name: "stdout", src: SourceStdout, want: "stdout\n"},
-		{name: "file", src: Source{Kind: "file", Path: "out.json"}, want: "file:out.json\n"},
+		{name: "stdout", src: NewSourceStdout(), want: "stdout\n"},
+		{name: "file", src: NewSourceFile("out.json"), want: "file:out.json\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

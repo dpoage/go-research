@@ -76,9 +76,8 @@ func (c *Config) applyDefaults() {
 	if c.Git.BranchPrefix == "" {
 		c.Git.BranchPrefix = "research/"
 	}
-	// Default source to stdout when not specified in YAML.
 	if c.Eval.Source.Kind == "" {
-		c.Eval.Source = SourceStdout
+		c.Eval.Source = NewSourceStdout()
 	}
 }
 
@@ -95,17 +94,17 @@ func (c *Config) validate() error {
 	if c.Eval.Metric == "" {
 		return fmt.Errorf("eval.metric is required")
 	}
-	if c.Eval.Direction == "" {
-		return fmt.Errorf("eval.direction is required")
+	if !c.Eval.Direction.Valid() {
+		return fmt.Errorf("eval.direction must be %q or %q", DirectionMinimize, DirectionMaximize)
 	}
-	if c.Provider.Backend == "" {
-		return fmt.Errorf("provider.backend is required")
+	if !c.Provider.Backend.Valid() {
+		return fmt.Errorf("provider.backend must be %q or %q", BackendAnthropic, BackendOpenAI)
 	}
 	if c.Provider.Model == "" {
 		return fmt.Errorf("provider.model is required")
 	}
-	if c.Eval.Source.IsFile() && strings.HasPrefix(c.Eval.Metric, "file:") {
-		return fmt.Errorf("eval.source and eval.metric cannot both use %q prefix", "file:")
+	if c.Eval.Source.IsFile() && strings.HasPrefix(c.Eval.Metric, sourceFilePrefix) {
+		return fmt.Errorf("eval.source and eval.metric cannot both use %q prefix", sourceFilePrefix)
 	}
 	return nil
 }

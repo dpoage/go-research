@@ -225,7 +225,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 		// Inject a budget reminder after the first round.
 		reqSystem := system
 		if round > 0 {
-			reqSystem = system + "\n\n" + budgetMessage(remaining, lastRound)
+			reqSystem = system + "\n\n" + budgetMessage(remaining)
 		}
 
 		resp, err := l.provider.Complete(ctx, &llm.Request{
@@ -289,9 +289,9 @@ func (l *Loop) checkCircuitBreaker(consecutiveErrors *int, err error) error {
 }
 
 // budgetMessage returns an escalating urgency reminder based on remaining rounds.
-func budgetMessage(remaining int, toolsDisabled bool) string {
+func budgetMessage(remaining int) string {
 	switch {
-	case toolsDisabled:
+	case remaining <= 1:
 		return "[FINAL ROUND. Tools are disabled. Summarize what you changed and stop.]"
 	case remaining <= 3:
 		return fmt.Sprintf("[URGENT: %d rounds remaining. Make your final changes NOW and stop.]", remaining)

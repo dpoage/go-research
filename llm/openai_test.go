@@ -7,7 +7,70 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/dpoage/go-research/config"
 )
+
+func TestNewOpenAI_WithEnvKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	cfg := config.ProviderConfig{
+		Backend:   config.BackendOpenAI,
+		Model:     "gpt-4",
+		MaxTokens: 256,
+	}
+	o, err := NewOpenAI(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if o == nil {
+		t.Fatal("NewOpenAI returned nil")
+	}
+	if o.apiKey != "test-openai-key" {
+		t.Errorf("apiKey = %q, want %q", o.apiKey, "test-openai-key")
+	}
+	if o.model != "gpt-4" {
+		t.Errorf("model = %q, want %q", o.model, "gpt-4")
+	}
+	if o.url != defaultOpenAIURL {
+		t.Errorf("url = %q, want default %q", o.url, defaultOpenAIURL)
+	}
+	if o.maxTokens != 256 {
+		t.Errorf("maxTokens = %d, want 256", o.maxTokens)
+	}
+	if o.client == nil {
+		t.Error("client is nil")
+	}
+}
+
+func TestNewOpenAI_WithURLOverride(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	cfg := config.ProviderConfig{
+		Backend: config.BackendOpenAI,
+		Model:   "gpt-4",
+		URL:     "http://localhost:9090",
+	}
+	o, err := NewOpenAI(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if o.url != "http://localhost:9090" {
+		t.Errorf("url = %q, want %q", o.url, "http://localhost:9090")
+	}
+}
+
+func TestNewOpenAI_NoAPIKey(t *testing.T) {
+	cfg := config.ProviderConfig{
+		Backend:   config.BackendOpenAI,
+		APIKeyEnv: "TEST_OPENAI_MISSING_KEY",
+		Model:     "gpt-4",
+	}
+	_, err := NewOpenAI(cfg)
+	if err == nil {
+		t.Fatal("expected error when API key env var is not set")
+	}
+}
 
 func TestOpenAI_Complete_TextResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -311,6 +374,87 @@ func TestOpenAI_Complete_RetryableError(t *testing.T) {
 	}
 	if !apiErr.Retryable() {
 		t.Error("429 should be retryable")
+	}
+}
+
+func TestOpenAI_Complete_SendError(t *testing.T) {
+	// Use a server that immediately closes the connection to trigger send error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("server does not support hijacking")
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	o := &OpenAI{
+		apiKey:    "test-key",
+		model:     "gpt-4",
+		url:       srv.URL,
+		maxTokens: 1024,
+		client:    srv.Client(),
+	}
+
+	_, err := o.Complete(context.Background(), &Request{
+		Messages: []Message{NewTextMessage("user", "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error when connection is closed")
+	}
+}
+
+func TestOpenAI_Complete_InvalidJSONResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("not valid json"))
+	}))
+	defer srv.Close()
+
+	o := &OpenAI{
+		apiKey:    "test-key",
+		model:     "gpt-4",
+		url:       srv.URL,
+		maxTokens: 1024,
+		client:    srv.Client(),
+	}
+
+	_, err := o.Complete(context.Background(), &Request{
+		Messages: []Message{NewTextMessage("user", "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+}
+
+func TestOpenAI_Complete_APILevelError(t *testing.T) {
+	// A 200 response that contains an error field in the body.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := openaiResponse{}
+		resp.Error = &struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		}{Message: "model overloaded", Type: "server_error"}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	o := &OpenAI{
+		apiKey:    "test-key",
+		model:     "gpt-4",
+		url:       srv.URL,
+		maxTokens: 1024,
+		client:    srv.Client(),
+	}
+
+	_, err := o.Complete(context.Background(), &Request{
+		Messages: []Message{NewTextMessage("user", "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error for API-level error in 200 response")
 	}
 }
 

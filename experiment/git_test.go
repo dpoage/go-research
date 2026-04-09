@@ -153,3 +153,107 @@ func TestGit_CommitNoChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGit_CheckoutBranch(t *testing.T) {
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	g := NewGit(true, dir, []string{"README.md"})
+
+	// Create a branch to check out.
+	branch, err := g.CreateBranch("feature/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Switch back to main/master.
+	mainBranch, err := g.CurrentBranch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// We are already on the new branch; create another to switch back to.
+	cmd := exec.Command("git", "checkout", "-b", "other-branch")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create other branch: %s: %s", err, out)
+	}
+
+	// CheckoutBranch should switch back to the original branch.
+	if err := g.CheckoutBranch(branch); err != nil {
+		t.Fatalf("CheckoutBranch(%q): %v", branch, err)
+	}
+
+	current, err := g.CurrentBranch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != branch {
+		t.Errorf("current branch = %q, want %q", current, branch)
+	}
+	_ = mainBranch
+}
+
+func TestGit_CheckoutBranch_Disabled(t *testing.T) {
+	g := NewGit(false, "", nil)
+	if err := g.CheckoutBranch("any-branch"); err != nil {
+		t.Fatalf("disabled CheckoutBranch should be no-op, got: %v", err)
+	}
+}
+
+func TestGit_CheckoutBranch_Error(t *testing.T) {
+	dir := initTestRepo(t)
+	g := NewGit(true, dir, nil)
+
+	// Checking out a non-existent branch should return an error.
+	err := g.CheckoutBranch("does-not-exist-branch-xyz")
+	if err == nil {
+		t.Error("expected error checking out nonexistent branch, got nil")
+	}
+}
+
+func TestGit_CurrentBranch_Disabled(t *testing.T) {
+	g := NewGit(false, "", nil)
+	branch, err := g.CurrentBranch()
+	if err != nil {
+		t.Fatalf("disabled CurrentBranch should be no-op, got: %v", err)
+	}
+	if branch != "" {
+		t.Errorf("disabled CurrentBranch should return empty string, got %q", branch)
+	}
+}
+
+func TestGit_CurrentBranch_Error(t *testing.T) {
+	// Point git at a non-existent directory so rev-parse fails.
+	g := NewGit(true, "/nonexistent-dir-xyz", nil)
+	_, err := g.CurrentBranch()
+	if err == nil {
+		t.Error("expected error from CurrentBranch in invalid dir, got nil")
+	}
+}
+
+func TestGit_Revert_Error(t *testing.T) {
+	// Point git at a non-existent directory so checkout . fails.
+	g := NewGit(true, "/nonexistent-dir-xyz", nil)
+	err := g.Revert()
+	if err == nil {
+		t.Error("expected error from Revert in invalid dir, got nil")
+	}
+}
+
+func TestGit_CreateBranch_Error(t *testing.T) {
+	// Point git at a non-existent directory so checkout -b fails.
+	g := NewGit(true, "/nonexistent-dir-xyz", nil)
+	_, err := g.CreateBranch("test/")
+	if err == nil {
+		t.Error("expected error from CreateBranch in invalid dir, got nil")
+	}
+}
+
+func TestGit_Commit_AddError(t *testing.T) {
+	// Point git at a non-existent directory so git add fails.
+	g := NewGit(true, "/nonexistent-dir-xyz", []string{"README.md"})
+	err := g.Commit("should fail")
+	if err == nil {
+		t.Error("expected error from Commit in invalid dir, got nil")
+	}
+}

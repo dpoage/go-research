@@ -167,3 +167,36 @@ func TestRetryProvider_RetryableStatusCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIError_Error(t *testing.T) {
+	tests := []struct {
+		statusCode int
+		body       string
+		want       string
+	}{
+		{200, "ok", "API error (status 200): ok"},
+		{400, "bad request", "API error (status 400): bad request"},
+		{429, "rate limit exceeded", "API error (status 429): rate limit exceeded"},
+		{500, "", "API error (status 500): "},
+	}
+	for _, tt := range tests {
+		e := &APIError{StatusCode: tt.statusCode, Body: tt.body}
+		got := e.Error()
+		if got != tt.want {
+			t.Errorf("Error() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestRetryProvider_Backoff_ExceedsMaxBackoff(t *testing.T) {
+	// baseDelay=1s, attempt=5 => 1s<<5 = 32s > maxBackoff(30s); delay must be capped.
+	rp := &RetryProvider{baseDelay: time.Second, maxRetries: 10}
+	d := rp.backoff(5)
+	// The result is maxBackoff + jitter(0..maxBackoff), so it is in [maxBackoff, 2*maxBackoff).
+	if d < maxBackoff {
+		t.Errorf("backoff(5) = %v, want >= maxBackoff (%v)", d, maxBackoff)
+	}
+	if d >= 2*maxBackoff {
+		t.Errorf("backoff(5) = %v, want < 2*maxBackoff (%v)", d, 2*maxBackoff)
+	}
+}

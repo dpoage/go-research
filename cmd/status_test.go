@@ -119,6 +119,48 @@ func TestKeptMetricValues_Empty(t *testing.T) {
 	}
 }
 
+func TestRunStatus_NoConfig(t *testing.T) {
+	// Status should work even without a config file (direction will be empty).
+	dir := t.TempDir()
+	results := "iteration\tmetric\tstatus\telapsed_ms\ttimestamp\tnote\n" +
+		"1\t0.845000\tkeep\t1234\t2026-04-07T14:30:22Z\t\n"
+	os.WriteFile(filepath.Join(dir, "results.tsv"), []byte(results), 0o644)
+
+	gf := globalFlags{config: filepath.Join(dir, "nope.yaml")}
+	err := runStatus(gf, []string{"--results", filepath.Join(dir, "results.tsv")})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunStatus_EmptyResults(t *testing.T) {
+	dir := t.TempDir()
+	results := "iteration\tmetric\tstatus\telapsed_ms\ttimestamp\tnote\n"
+	os.WriteFile(filepath.Join(dir, "results.tsv"), []byte(results), 0o644)
+
+	gf := globalFlags{config: filepath.Join(dir, "nope.yaml")}
+	err := runStatus(gf, []string{"--results", filepath.Join(dir, "results.tsv")})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunStatus_BadFlags(t *testing.T) {
+	gf := globalFlags{}
+	err := runStatus(gf, []string{"--bogus"})
+	if err == nil {
+		t.Fatal("expected error for unknown flag")
+	}
+}
+
+func TestRunHistory_BadFlags(t *testing.T) {
+	gf := globalFlags{}
+	err := runHistory(gf, []string{"--bogus"})
+	if err == nil {
+		t.Fatal("expected error for unknown flag")
+	}
+}
+
 func TestBestKeptMetric_NoKeepRows(t *testing.T) {
 	rows := []resultRow{
 		{Iteration: 1, Metric: 0.5, Status: experiment.StatusDiscard},

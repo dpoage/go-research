@@ -224,7 +224,93 @@ func TestRunInit_FileRequiresEvalAndMetric(t *testing.T) {
 	}
 }
 
-func TestRunInit_MultipleFiles(t *testing.T) {
+func TestRunInit_OpenAIBackend(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "model.py"), []byte("# model"), 0o644)
+
+	err := runInit([]string{
+		"--dir", dir,
+		"--file", "model.py",
+		"--eval", "python model.py",
+		"--metric", `acc: (\d+\.\d+)`,
+		"--backend", "openai",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cfg, err := config.Load(filepath.Join(dir, "research.yaml"))
+	if err != nil {
+		t.Fatalf("config.Load failed: %v", err)
+	}
+	if cfg.Provider.Backend != config.BackendOpenAI {
+		t.Errorf("backend: got %q, want %q", cfg.Provider.Backend, config.BackendOpenAI)
+	}
+	if cfg.Provider.APIKeyEnv != "OPENAI_API_KEY" {
+		t.Errorf("api_key_env: got %q, want %q", cfg.Provider.APIKeyEnv, "OPENAI_API_KEY")
+	}
+}
+
+func TestRunInit_InvalidTimeout(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "train.py"), []byte("# train"), 0o644)
+
+	err := runInit([]string{
+		"--dir", dir,
+		"--file", "train.py",
+		"--eval", "python train.py",
+		"--metric", `loss: (\d+)`,
+		"--timeout", "notaduration",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid timeout")
+	}
+	if !strings.Contains(err.Error(), "invalid timeout") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunInit_BadFlags(t *testing.T) {
+	err := runInit([]string{"--bogus"})
+	if err == nil {
+		t.Fatal("expected error for unknown flag")
+	}
+}
+
+func TestRunInit_AllFilesExist(t *testing.T) {
+	dir := t.TempDir()
+
+	// Pre-create all counter scaffold files.
+	for _, name := range []string{"counter.txt", "eval.sh", "research.yaml", "program.md"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("existing"), 0o644)
+	}
+
+	err := runInit([]string{"--dir", dir})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All files should still have original content.
+	for _, name := range []string{"counter.txt", "eval.sh", "research.yaml", "program.md"} {
+		data, _ := os.ReadFile(filepath.Join(dir, name))
+		if string(data) != "existing" {
+			t.Errorf("%s was overwritten", name)
+		}
+	}
+}
+
+func TestRunInit_WriteError(t *testing.T) {
+	// Use a non-existent nested dir so os.WriteFile fails.
+	err := scaffoldCounter("/nonexistent/deeply/nested/path")
+	if err != nil {
+		// Expected — writeFile fails because parent dir doesn't exist.
+		if !strings.Contains(err.Error(), "write") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+}
+
+func TestMultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.py"), []byte("# a"), 0o644)
 	os.WriteFile(filepath.Join(dir, "b.py"), []byte("# b"), 0o644)

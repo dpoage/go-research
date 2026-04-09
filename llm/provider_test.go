@@ -73,3 +73,66 @@ func TestNewProvider_UnknownBackend(t *testing.T) {
 		t.Fatal("expected error for unknown backend")
 	}
 }
+
+func TestNewProvider_Anthropic(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+	p, err := NewProvider(configProviderConfig(config.BackendAnthropic, "claude-3"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == nil {
+		t.Fatal("NewProvider returned nil")
+	}
+	// The returned provider must be a *RetryProvider wrapping the Anthropic backend.
+	rp, ok := p.(*RetryProvider)
+	if !ok {
+		t.Fatalf("expected *RetryProvider, got %T", p)
+	}
+	if _, ok := rp.inner.(*Anthropic); !ok {
+		t.Errorf("expected inner provider to be *Anthropic, got %T", rp.inner)
+	}
+}
+
+func TestNewProvider_OpenAI(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	p, err := NewProvider(configProviderConfig(config.BackendOpenAI, "gpt-4"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == nil {
+		t.Fatal("NewProvider returned nil")
+	}
+	rp, ok := p.(*RetryProvider)
+	if !ok {
+		t.Fatalf("expected *RetryProvider, got %T", p)
+	}
+	if _, ok := rp.inner.(*OpenAI); !ok {
+		t.Errorf("expected inner provider to be *OpenAI, got %T", rp.inner)
+	}
+}
+
+func TestNewProvider_AnthropicMissingKey(t *testing.T) {
+	cfg := config.ProviderConfig{
+		Backend:   config.BackendAnthropic,
+		APIKeyEnv: "TEST_PROVIDER_ANTHROPIC_MISSING_KEY",
+		Model:     "claude-3",
+	}
+	_, err := NewProvider(cfg)
+	if err == nil {
+		t.Fatal("expected error when anthropic API key is missing")
+	}
+}
+
+func TestNewProvider_OpenAIMissingKey(t *testing.T) {
+	cfg := config.ProviderConfig{
+		Backend:   config.BackendOpenAI,
+		APIKeyEnv: "TEST_PROVIDER_OPENAI_MISSING_KEY",
+		Model:     "gpt-4",
+	}
+	_, err := NewProvider(cfg)
+	if err == nil {
+		t.Fatal("expected error when openai API key is missing")
+	}
+}

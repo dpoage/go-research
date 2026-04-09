@@ -20,6 +20,67 @@ func configProviderConfig(backend config.Backend, model string) config.ProviderC
 	}
 }
 
+func TestNewAnthropic_WithEnvKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+	cfg := config.ProviderConfig{
+		Backend:   config.BackendAnthropic,
+		Model:     "claude-3",
+		MaxTokens: 512,
+	}
+	a, err := NewAnthropic(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("NewAnthropic returned nil")
+	}
+	if a.apiKey != "test-anthropic-key" {
+		t.Errorf("apiKey = %q, want %q", a.apiKey, "test-anthropic-key")
+	}
+	if a.model != "claude-3" {
+		t.Errorf("model = %q, want %q", a.model, "claude-3")
+	}
+	if a.url != defaultAnthropicURL {
+		t.Errorf("url = %q, want default %q", a.url, defaultAnthropicURL)
+	}
+	if a.maxTokens != 512 {
+		t.Errorf("maxTokens = %d, want 512", a.maxTokens)
+	}
+	if a.client == nil {
+		t.Error("client is nil")
+	}
+}
+
+func TestNewAnthropic_WithURLOverride(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	cfg := config.ProviderConfig{
+		Backend: config.BackendAnthropic,
+		Model:   "claude-3",
+		URL:     "http://localhost:8080",
+	}
+	a, err := NewAnthropic(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a.url != "http://localhost:8080" {
+		t.Errorf("url = %q, want %q", a.url, "http://localhost:8080")
+	}
+}
+
+func TestNewAnthropic_NoAPIKey(t *testing.T) {
+	cfg := config.ProviderConfig{
+		Backend:   config.BackendAnthropic,
+		APIKeyEnv: "TEST_ANTHROPIC_MISSING_KEY",
+		Model:     "claude-3",
+	}
+	_, err := NewAnthropic(cfg)
+	if err == nil {
+		t.Fatal("expected error when API key env var is not set")
+	}
+}
+
 func TestAnthropic_Complete_TextResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify request structure.
@@ -240,6 +301,87 @@ func TestAnthropic_Complete_APIError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for 400 response")
+	}
+}
+
+func TestAnthropic_Complete_SendError(t *testing.T) {
+	// Use a server that immediately closes the connection to trigger send error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("server does not support hijacking")
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	a := &Anthropic{
+		apiKey:    "test-key",
+		model:     "claude-test",
+		url:       srv.URL,
+		maxTokens: 1024,
+		client:    srv.Client(),
+	}
+
+	_, err := a.Complete(context.Background(), &Request{
+		Messages: []Message{NewTextMessage("user", "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error when connection is closed")
+	}
+}
+
+func TestAnthropic_Complete_InvalidJSONResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("not valid json"))
+	}))
+	defer srv.Close()
+
+	a := &Anthropic{
+		apiKey:    "test-key",
+		model:     "claude-test",
+		url:       srv.URL,
+		maxTokens: 1024,
+		client:    srv.Client(),
+	}
+
+	_, err := a.Complete(context.Background(), &Request{
+		Messages: []Message{NewTextMessage("user", "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+}
+
+func TestAnthropic_Complete_APILevelError(t *testing.T) {
+	// A 200 response that contains an error field in the body.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := anthropicResponse{}
+		resp.Error = &struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}{Type: "overloaded_error", Message: "server overloaded"}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	a := &Anthropic{
+		apiKey:    "test-key",
+		model:     "claude-test",
+		url:       srv.URL,
+		maxTokens: 1024,
+		client:    srv.Client(),
+	}
+
+	_, err := a.Complete(context.Background(), &Request{
+		Messages: []Message{NewTextMessage("user", "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error for API-level error in 200 response")
 	}
 }
 

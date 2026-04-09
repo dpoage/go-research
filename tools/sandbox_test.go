@@ -64,3 +64,24 @@ func TestSandbox_EmptyFileList(t *testing.T) {
 		t.Error("expected all writes denied with empty file list")
 	}
 }
+
+func TestNewSandbox_AbsoluteFileInList(t *testing.T) {
+	dir := t.TempDir()
+	absFile := dir + "/absolute.txt"
+
+	// Pass an absolute path in the files list — NewSandbox should store it
+	// cleaned and CheckWrite using that same absolute path must succeed.
+	sb, err := NewSandbox(dir, []string{absFile})
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+
+	if err := sb.CheckWrite(absFile); err != nil {
+		t.Errorf("expected write to absolute allowed path to succeed, got: %v", err)
+	}
+
+	// A different absolute path must still be denied.
+	if err := sb.CheckWrite(dir + "/other.txt"); err == nil {
+		t.Error("expected write to unlisted absolute path to be denied")
+	}
+}

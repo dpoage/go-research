@@ -1165,8 +1165,8 @@ func TestLoop_ToolLoop_ContextCancelledBetweenRounds(t *testing.T) {
 
 func TestToolDefs(t *testing.T) {
 	defs := ToolDefs()
-	if len(defs) != 3 {
-		t.Fatalf("expected 3 tool defs, got %d", len(defs))
+	if len(defs) != 4 {
+		t.Fatalf("expected 4 tool defs, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -1179,15 +1179,15 @@ func TestToolDefs(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolRunCommand} {
+	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolRunCommand, tools.ToolDone} {
 		if !names[expected] {
 			t.Errorf("missing tool def: %s", expected)
 		}
 	}
 }
 
-func TestLoop_ToolLoop_WriteThenDoneExit(t *testing.T) {
-	// After a write_file, if the next round has only reads, the tool loop should exit early.
+func TestLoop_ToolLoop_DoneToolExit(t *testing.T) {
+	// The tool loop should exit when the model calls the done tool.
 	dir := initTestRepo(t)
 	chdir(t, dir)
 
@@ -1236,9 +1236,9 @@ func TestLoop_ToolLoop_WriteThenDoneExit(t *testing.T) {
 	eval, _ := NewEval(cfg.Eval)
 	git := NewGit(false, dir, nil)
 
-	// Round 0: write_file (sets hasWritten=true)
-	// Round 1: read_file (no write → triggers write-then-done exit)
-	// Round 2: should never be reached — this would be a read_file that proves loop didn't exit
+	// Round 0: write_file
+	// Round 1: write_file + done (batched — both dispatched, then loop exits)
+	// Round 2: should never be reached
 	provider := &mockProvider{
 		responses: []*llm.Response{
 			{
@@ -1251,19 +1251,27 @@ func TestLoop_ToolLoop_WriteThenDoneExit(t *testing.T) {
 				StopReason: llm.StopToolUse,
 			},
 			{
-				Content: []llm.ContentBlock{{
-					Type:  llm.BlockToolUse,
-					ID:    "call_2",
-					Name:  tools.ToolReadFile,
-					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
-				}},
+				Content: []llm.ContentBlock{
+					{
+						Type:  llm.BlockToolUse,
+						ID:    "call_2",
+						Name:  tools.ToolWriteFile,
+						Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"0"}`, counterPath)),
+					},
+					{
+						Type:  llm.BlockToolUse,
+						ID:    "call_3",
+						Name:  tools.ToolDone,
+						Input: json.RawMessage(`{"summary":"lowered counter"}`),
+					},
+				},
 				StopReason: llm.StopToolUse,
 			},
-			// This should NOT be reached due to write-then-done exit.
+			// This should NOT be reached.
 			{
 				Content: []llm.ContentBlock{{
 					Type:  llm.BlockToolUse,
-					ID:    "call_3",
+					ID:    "call_4",
 					Name:  tools.ToolReadFile,
 					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
 				}},
@@ -1286,10 +1294,18 @@ func TestLoop_ToolLoop_WriteThenDoneExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Provider should have been called exactly 2 times (write round + read round),
-	// not 3 times, because the write-then-done heuristic exits after the read round.
+	// Provider should have been called exactly 2 times (write round + write+done round).
 	if provider.calls != 2 {
-		t.Errorf("expected 2 provider calls (write-then-done exit), got %d", provider.calls)
+		t.Errorf("expected 2 provider calls (done tool exit), got %d", provider.calls)
+	}
+
+	// The write in the done round should have been dispatched before exiting.
+	data, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "0" {
+		t.Errorf("expected counter to be '0' (write dispatched before done), got %q", string(data))
 	}
 }
 

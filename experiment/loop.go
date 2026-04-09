@@ -80,6 +80,11 @@ func ToolDefs() []llm.ToolDef {
 			Description: "Run a shell command and return its output.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"}},"required":["command"]}`),
 		},
+		{
+			Name:        tools.ToolDone,
+			Description: "Signal that you have finished making changes for this iteration. Call this when your change is complete.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string","description":"Brief description of the change you made"}}}`),
+		},
 	}
 }
 
@@ -181,19 +186,17 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 		}
 	}
 
-	prompt += `
+	prompt += fmt.Sprintf(`
 Make exactly ONE focused change per iteration.
-After writing your change, stop — the eval runs automatically.
-Do not read files you have already read in this iteration.
-Do not verify or re-read files after writing them.`
+You have %d tool rounds. After that, your turn ends and the eval runs on the current file state.
+Call the done tool when you have finished your change.`, l.config.Provider.MaxRounds)
 	return prompt
 }
 
 // toolLoop runs LLM completion in a loop, dispatching tool calls until the model
-// returns end_turn or we hit max rounds.
+// calls the done tool, returns end_turn, or exhausts the round budget.
 func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Message, toolDefs []llm.ToolDef) ([]llm.Message, error) {
 	maxRounds := l.config.Provider.MaxRounds
-	hasWritten := false
 
 	for round := range maxRounds {
 		if ctx.Err() != nil {
@@ -210,7 +213,6 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			return messages, fmt.Errorf("LLM completion (round %d): %w", round+1, err)
 		}
 
-		// Append assistant response.
 		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Content})
 
 		if text := resp.TextContent(); text != "" {
@@ -222,20 +224,18 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			return messages, nil
 		}
 
-		// Dispatch each tool call and build result messages.
-		wroteThisRound := false
-		readOnly := true
+		// Dispatch tool calls, handling `done` as an exit signal.
+		done := false
 		for _, tc := range toolCalls {
-			if tc.Name == tools.ToolWriteFile {
-				wroteThisRound = true
-				readOnly = false
-			} else if tc.Name != tools.ToolReadFile {
-				readOnly = false
+			if tc.Name == tools.ToolDone {
+				done = true
+				l.observer.ToolCall(tc.Name, "iteration complete")
+				messages = append(messages, llm.NewToolResultMessage(tc.ID, "Evaluation will now run.", false))
+				continue
 			}
 
 			result := l.executor.Dispatch(ctx, tc.Name, tc.Input)
 
-			// Truncate long output to avoid blowing context.
 			output := result.Output
 			if len(output) > maxToolOutput {
 				output = output[:maxToolOutput] + "\n... (truncated)"
@@ -245,13 +245,8 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			messages = append(messages, llm.NewToolResultMessage(tc.ID, output, result.IsError))
 		}
 
-		// If the model previously wrote a file and this round only reads,
-		// it is just verifying — exit the tool loop.
-		if hasWritten && readOnly {
+		if done {
 			return messages, nil
-		}
-		if wroteThisRound {
-			hasWritten = true
 		}
 	}
 

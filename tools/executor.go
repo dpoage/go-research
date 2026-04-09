@@ -15,6 +15,7 @@ const (
 	ToolReadFile   = "read_file"
 	ToolWriteFile  = "write_file"
 	ToolRunCommand = "run_command"
+	ToolDone       = "done"
 )
 
 // Executor dispatches tool calls and enforces sandbox rules.

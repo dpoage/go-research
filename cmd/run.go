@@ -24,6 +24,7 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	maxIter := fs.Int("max-iter", 0, "maximum iterations (0 = unlimited)")
 	resultFile := fs.String("results", defaultResultsFile, "path to TSV result log")
+	verbose := fs.BoolP("verbose", "v", false, "show full agent and tool output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -76,6 +77,13 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 		}
 	}
 
-	loop := experiment.NewLoop(cfg, provider, executor, eval, git, logger, *resultFile)
+	var observer experiment.Observer
+	if *verbose {
+		observer = experiment.VerboseObserver{}
+	} else {
+		observer = experiment.NewStatusLineObserver()
+	}
+
+	loop := experiment.NewLoop(cfg, provider, executor, eval, git, logger, *resultFile, observer)
 	return loop.Run(ctx, *maxIter)
 }

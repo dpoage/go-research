@@ -25,10 +25,11 @@ type Loop struct {
 	git         *Git
 	logger      *ResultLogger
 	resultsPath string
+	observer    Observer
 }
 
 // NewLoop creates a Loop wired to the given collaborators.
-func NewLoop(cfg *config.Config, provider llm.Provider, executor *tools.Executor, eval *Eval, git *Git, logger *ResultLogger, resultsPath string) *Loop {
+func NewLoop(cfg *config.Config, provider llm.Provider, executor *tools.Executor, eval *Eval, git *Git, logger *ResultLogger, resultsPath string, observer Observer) *Loop {
 	return &Loop{
 		config:      cfg,
 		provider:    provider,
@@ -37,6 +38,7 @@ func NewLoop(cfg *config.Config, provider llm.Provider, executor *tools.Executor
 		git:         git,
 		logger:      logger,
 		resultsPath: resultsPath,
+		observer:    observer,
 	}
 }
 
@@ -78,7 +80,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			return ctx.Err()
 		}
 
-		fmt.Printf("\n=== Iteration %d ===\n", iter)
+		l.observer.IterationStart(iter, maxIter)
 
 		prompt := l.buildPrompt(iter, bestMetric)
 		messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, prompt)}
@@ -91,37 +93,37 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 		}
 
 		// Evaluate.
-		fmt.Println("Running evaluation...")
+		l.observer.EvalStarted()
 		result := l.eval.Run(ctx)
 		if result.Error != nil {
-			fmt.Printf("Eval error: %v\n", result.Error)
+			l.observer.IterationError(iter, result.Error)
 			l.revert(iter)
-			l.logError(iter, result.Error)
+			l.logResult(iter, result, StatusError, result.Error.Error())
 			continue
 		}
 
-		fmt.Printf("Metric: %.6f (elapsed: %s)\n", result.Metric, result.Elapsed)
+		l.observer.EvalResult(iter, result.Metric, result.Elapsed)
 
 		// Decide keep/discard.
 		if l.isBetter(result.Metric, bestMetric) {
-			fmt.Printf("Improvement! (previous best: %v)\n", formatMetric(bestMetric))
+			l.observer.Improvement(iter, result.Metric, bestMetric)
 			bestMetric = result.Metric
 
 			// Log before commit so the results file is included in the snapshot.
 			l.logResult(iter, result, StatusKeep, "")
 
 			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.resultsPath); err != nil {
-				fmt.Printf("Warning: git commit failed: %v\n", err)
+				l.observer.Warning(fmt.Sprintf("git commit failed: %v", err))
 			}
 		} else {
-			fmt.Printf("No improvement (best: %v). Reverting.\n", formatMetric(bestMetric))
+			l.observer.NoImprovement(iter, result.Metric, bestMetric)
 			l.revert(iter)
 			// Log after revert so the entry isn't reverted with the code changes.
 			l.logResult(iter, result, StatusDiscard, fmt.Sprintf("best=%.6f", bestMetric))
 		}
 	}
 
-	fmt.Printf("\nDone. Best metric: %v\n", formatMetric(bestMetric))
+	l.observer.Complete(bestMetric)
 	return nil
 }
 
@@ -160,7 +162,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Content})
 
 		if text := resp.TextContent(); text != "" {
-			fmt.Printf("Agent: %s\n", text)
+			l.observer.AgentText(text)
 		}
 
 		toolCalls := resp.ToolUseBlocks()
@@ -178,7 +180,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 				output = output[:maxToolOutput] + "\n... (truncated)"
 			}
 
-			fmt.Printf("Tool %s: %s\n", tc.Name, truncateDisplay(output, 200))
+			l.observer.ToolCall(tc.Name, output)
 			messages = append(messages, llm.NewToolResultMessage(tc.ID, output, result.IsError))
 		}
 	}
@@ -198,7 +200,7 @@ func (l *Loop) isBetter(current, best float64) bool {
 
 func (l *Loop) revert(iter int) {
 	if err := l.git.Revert(); err != nil {
-		fmt.Printf("Warning: revert failed (iter %d): %v\n", iter, err)
+		l.observer.Warning(fmt.Sprintf("revert failed (iter %d): %v", iter, err))
 	}
 }
 
@@ -210,18 +212,18 @@ func (l *Loop) logResult(iter int, result EvalResult, status Status, note string
 		Elapsed:   result.Elapsed,
 		Note:      note,
 	}); err != nil {
-		fmt.Printf("Warning: log result failed: %v\n", err)
+		l.observer.Warning(fmt.Sprintf("log result failed: %v", err))
 	}
 }
 
 func (l *Loop) logError(iter int, err error) {
-	fmt.Printf("Error in iteration %d: %v\n", iter, err)
+	l.observer.IterationError(iter, err)
 	if logErr := l.logger.Append(ResultEntry{
 		Iteration: iter,
 		Status:    StatusError,
 		Note:      err.Error(),
 	}); logErr != nil {
-		fmt.Printf("Warning: log error failed: %v\n", logErr)
+		l.observer.Warning(fmt.Sprintf("log error failed: %v", logErr))
 	}
 }
 

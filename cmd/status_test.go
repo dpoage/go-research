@@ -96,6 +96,29 @@ func TestBestKeptMetric_Maximize(t *testing.T) {
 	}
 }
 
+func TestKeptMetricValues(t *testing.T) {
+	rows := []resultRow{
+		{Iteration: 1, Metric: 0.9, Status: experiment.StatusKeep},
+		{Iteration: 2, Metric: 0.5, Status: experiment.StatusDiscard},
+		{Iteration: 3, Metric: 0.7, Status: experiment.StatusKeep},
+		{Iteration: 4, Metric: 0.3, Status: experiment.StatusError},
+	}
+	vals := keptMetricValues(rows)
+	if len(vals) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(vals))
+	}
+	if vals[0] != 0.9 || vals[1] != 0.7 {
+		t.Errorf("got %v, want [0.9 0.7]", vals)
+	}
+}
+
+func TestKeptMetricValues_Empty(t *testing.T) {
+	vals := keptMetricValues(nil)
+	if len(vals) != 0 {
+		t.Errorf("expected empty, got %v", vals)
+	}
+}
+
 func TestBestKeptMetric_NoKeepRows(t *testing.T) {
 	rows := []resultRow{
 		{Iteration: 1, Metric: 0.5, Status: experiment.StatusDiscard},

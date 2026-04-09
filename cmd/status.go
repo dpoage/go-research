@@ -9,6 +9,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"github.com/dpoage/go-research/config"
+	"github.com/dpoage/go-research/display"
 	"github.com/dpoage/go-research/experiment"
 )
 
@@ -46,7 +47,9 @@ func runStatus(gf globalFlags, args []string) error {
 		lastTimestamp = rows[iterCount-1].Timestamp
 	}
 
+	keptMetrics := keptMetricValues(rows)
 	bestMetric, hasBest := bestKeptMetric(rows, direction)
+	trend := display.Sparkline(keptMetrics)
 
 	// Print output.
 	fmt.Printf("Branch:      %s\n", branch)
@@ -60,6 +63,9 @@ func runStatus(gf globalFlags, args []string) error {
 	} else {
 		fmt.Println("Best metric: n/a")
 	}
+	if trend != "" {
+		fmt.Printf("Trend:       %s\n", trend)
+	}
 	if lastTimestamp != "" {
 		fmt.Printf("Last run:    %s\n", lastTimestamp)
 	} else {
@@ -67,6 +73,17 @@ func runStatus(gf globalFlags, args []string) error {
 	}
 
 	return nil
+}
+
+// keptMetricValues extracts the metric values from "keep" rows in order.
+func keptMetricValues(rows []resultRow) []float64 {
+	var vals []float64
+	for _, r := range rows {
+		if r.Status == experiment.StatusKeep {
+			vals = append(vals, r.Metric)
+		}
+	}
+	return vals
 }
 
 // bestKeptMetric returns the best metric value among "keep" rows, respecting direction.

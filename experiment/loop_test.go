@@ -148,7 +148,7 @@ func TestLoop_EndToEnd(t *testing.T) {
 		},
 	}
 
-	loop := NewLoop(cfg, provider, executor, eval, git, logger, resultsPath)
+	loop := NewLoop(cfg, provider, executor, eval, git, logger, resultsPath, VerboseObserver{})
 
 	if err := loop.Run(context.Background(), 2); err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	loop := NewLoop(cfg, &mockProvider{}, executor, eval, git, logger, resultsPath)
+	loop := NewLoop(cfg, &mockProvider{}, executor, eval, git, logger, resultsPath, VerboseObserver{})
 
 	err := loop.Run(ctx, 10)
 	if err == nil {

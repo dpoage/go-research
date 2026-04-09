@@ -25,7 +25,7 @@ func NewExtractor(pattern string) (MetricExtractor, error) {
 	case strings.HasPrefix(pattern, "jq:"):
 		return NewJQExtractor(pattern[3:])
 	case strings.HasPrefix(pattern, "file:"):
-		return NewFileExtractor(pattern[5:])
+		return NewFileSource(pattern[5:])
 	case strings.HasPrefix(pattern, "regex:"):
 		return NewRegexExtractor(pattern[6:])
 	default:

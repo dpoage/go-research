@@ -45,7 +45,7 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 
 	executor := tools.NewExecutor(sandbox, defaultToolTimeout)
 
-	eval, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout.Duration)
+	eval, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Source, cfg.Eval.Timeout.Duration)
 	if err != nil {
 		return fmt.Errorf("create eval: %w", err)
 	}

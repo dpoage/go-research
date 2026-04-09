@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,7 @@ type Config struct {
 type EvalConfig struct {
 	Command   string   `yaml:"command"`
 	Metric    string   `yaml:"metric"`
+	Source    string   `yaml:"source"`
 	Direction string   `yaml:"direction"`
 	Timeout   Duration `yaml:"timeout"`
 }
@@ -104,6 +106,12 @@ func (c *Config) validate() error {
 		return fmt.Errorf("eval.direction is required (minimize or maximize)")
 	default:
 		return fmt.Errorf("eval.direction must be 'minimize' or 'maximize', got %q", c.Eval.Direction)
+	}
+	switch {
+	case c.Eval.Source == "", c.Eval.Source == "stdout", strings.HasPrefix(c.Eval.Source, "file:"):
+		// ok
+	default:
+		return fmt.Errorf("eval.source must be empty, \"stdout\", or \"file:<path>\", got %q", c.Eval.Source)
 	}
 	if c.Provider.Backend == "" {
 		return fmt.Errorf("provider.backend is required")

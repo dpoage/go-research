@@ -74,6 +74,12 @@ func checkFiles(cfg *config.Config) []checkResult {
 			missing = append(missing, f)
 		}
 	}
+	if strings.HasPrefix(cfg.Eval.Source, "file:") {
+		sourcePath := cfg.Eval.Source[5:]
+		if _, err := os.Stat(sourcePath); err != nil {
+			missing = append(missing, sourcePath)
+		}
+	}
 	if len(missing) > 0 {
 		return []checkResult{{
 			name: "files exist",
@@ -95,7 +101,7 @@ func checkAPIKey(cfg *config.Config) checkResult {
 }
 
 func checkEval(cfg *config.Config) []checkResult {
-	ev, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Timeout.Duration)
+	ev, err := experiment.NewEval(cfg.Eval.Command, cfg.Eval.Metric, cfg.Eval.Source, cfg.Eval.Timeout.Duration)
 	if err != nil {
 		return []checkResult{{name: "eval command runs", ok: false, msg: err.Error()}}
 	}

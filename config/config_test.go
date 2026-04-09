@@ -176,6 +176,54 @@ provider:
 	}
 }
 
+func TestLoad_WithSource(t *testing.T) {
+	yaml := `
+program: program.md
+files: [main.go]
+eval:
+  command: "go test ./..."
+  metric: '(?P<metric>\d+)'
+  source: "file:results.json"
+  direction: maximize
+provider:
+  backend: anthropic
+  model: claude-sonnet-4-20250514
+`
+	path := writeTemp(t, yaml)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Eval.Source != "file:results.json" {
+		t.Errorf("source = %q, want %q", cfg.Eval.Source, "file:results.json")
+	}
+}
+
+func TestLoad_InvalidSource(t *testing.T) {
+	yaml := `
+program: program.md
+files: [main.go]
+eval:
+  command: "go test ./..."
+  metric: '(?P<metric>\d+)'
+  source: "ftp:somewhere"
+  direction: maximize
+provider:
+  backend: anthropic
+  model: claude-sonnet-4-20250514
+`
+	path := writeTemp(t, yaml)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid source")
+	}
+	if got := err.Error(); !strings.Contains(got, "eval.source") {
+		t.Errorf("error = %q, want substring %q", got, "eval.source")
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/research.yaml")
 	if err == nil {

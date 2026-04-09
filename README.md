@@ -54,6 +54,7 @@ files:
 
 eval:
   command: "python train.py" # Run after each change
+  # source: stdout           # or file:<path>
   metric: 'val_loss:\s+([0-9.]+)'  # Regex to extract a number
   direction: minimize        # or "maximize"
   timeout: 5m
@@ -71,44 +72,39 @@ git:
 
 ## Metric extraction
 
-The `eval.metric` field controls how the numeric metric is extracted after each
-eval command runs. Four formats are supported:
+After each eval command runs, go-research extracts a numeric metric in two
+steps: **source** (where to read text from) and **extractor** (how to pull a
+number out of that text).
 
-### Regex (default)
+### Metric sources (`eval.source`)
 
-A regex with a capture group, applied to combined stdout+stderr:
+| Value | Description |
+|-------|-------------|
+| `stdout` (default) | Combined stdout+stderr of the eval command |
+| `file:<path>` | Read metric text from a file after eval runs |
 
-```yaml
-metric: 'val_loss:\s+([0-9.]+)'
-# or explicitly: metric: 'regex:val_loss:\s+([0-9.]+)'
-```
+### Metric extractors (`eval.metric`)
 
-The first capture group must match a number parseable as a float.
+| Prefix | Description |
+|--------|-------------|
+| *(regex)* | Capture-group pattern applied to source text (default) |
+| `jq:` | JSON dot-path (e.g. `jq:.results.val_bpb`, `jq:.[0].score`) |
+| `last-number` | Last float in source text (integers, decimals, `1.23e-4`) |
 
-### JSON path
-
-Extract a value from JSON output using a dot-separated path:
-
-```yaml
-metric: 'jq:.results.val_bpb'
-```
-
-Supports nested objects (`jq:.a.b.c`) and array indices (`jq:.[0].score`).
-
-### Last number
-
-Grab the last numeric value from the output — useful for simple scripts:
+### Example with source
 
 ```yaml
-metric: last-number
+eval:
+  command: "python train.py"
+  source: "file:results.json"   # read metric from file
+  metric: "jq:.val_loss"        # extract with JSON path
+  direction: minimize
 ```
 
-Matches integers, decimals, and scientific notation (e.g. `1.23e-4`).
+### `file:` shorthand in metric
 
-### File
-
-Read a metric from a file instead of command output. Composes with any of the
-above extractors:
+For backward compatibility, the metric field accepts `file:<path>:<extractor>`
+as shorthand for setting both source and extractor in one field:
 
 ```yaml
 metric: 'file:results.json:jq:.loss'
@@ -116,14 +112,17 @@ metric: 'file:output.txt:last-number'
 metric: 'file:log.txt:regex:score:\s+([0-9.]+)'
 ```
 
+This is equivalent to setting `source: file:<path>` and `metric: <extractor>`
+separately. The `eval.source` field is the preferred approach for new configs.
+
 ## Eval requirements
 
 The eval command must:
 
 - **Exit 0 on success.** A non-zero exit code is treated as a failed experiment
   (the change is reverted without checking the metric).
-- **Produce a metric.** Either print it to stdout/stderr (for regex, jq,
-  last-number extractors) or write it to a file (for the file extractor).
+- **Produce a metric.** Print it to stdout/stderr, or write it to a file when
+  `source` is set to `file:<path>`.
 
 The command runs via `sh -c`, so it uses POSIX shell — not bash. If you need
 bash features, call `bash -c "..."` or point at a bash script.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -18,16 +19,40 @@ type Eval struct {
 
 // NewEval creates an Eval from the config fields.
 // The metricPattern is parsed by NewExtractor to select the appropriate backend.
-func NewEval(command, metricPattern string, timeout time.Duration) (*Eval, error) {
+// The source parameter controls where the extractor reads text from:
+// "" or "stdout" reads from command output; "file:<path>" reads from a file.
+func NewEval(command, metricPattern, source string, timeout time.Duration) (*Eval, error) {
 	ext, err := NewExtractor(metricPattern)
 	if err != nil {
 		return nil, err
 	}
+
+	ext, err = applySource(ext, source)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Eval{
 		Command:   command,
 		Extractor: ext,
 		Timeout:   timeout,
 	}, nil
+}
+
+// applySource wraps the extractor based on the source specification.
+func applySource(ext MetricExtractor, source string) (MetricExtractor, error) {
+	switch {
+	case source == "" || source == "stdout":
+		return ext, nil
+	case strings.HasPrefix(source, "file:"):
+		path := source[5:]
+		if path == "" {
+			return nil, fmt.Errorf("file source requires a path")
+		}
+		return NewFileSourceFromParts(path, ext), nil
+	default:
+		return nil, fmt.Errorf("unknown source %q (expected stdout or file:<path>)", source)
+	}
 }
 
 // EvalResult holds the outcome of a single evaluation run.

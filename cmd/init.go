@@ -55,7 +55,7 @@ the target metric by modifying the allowed files.
 ## Evaluation
 
 The eval command is: {{.Eval}}
-The metric regex is: {{.Metric}}
+The metric extractor is: {{.Metric}}
 The goal is to {{.Direction}} the metric.
 
 ## Rules
@@ -81,6 +81,7 @@ files:
 {{- end}}
 eval:
   command: "{{.Eval}}"
+  # source: stdout             # or file:<path>
   metric: '{{.Metric}}'
   direction: {{.Direction}}
   timeout: {{.Timeout}}

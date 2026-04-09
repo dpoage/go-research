@@ -186,7 +186,9 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 		}
 	}
 
-	prompt += `
+	prompt += fmt.Sprintf(`
+
+You have %d tool-use rounds this iteration.
 
 After you call done, the harness evaluates your change against the current best metric. If the metric improved, your change is kept. If not, it is reverted entirely. You then get another iteration to try a different approach.
 
@@ -197,7 +199,7 @@ Steps:
 2. Make one focused change.
 3. Call done with a summary of what you changed.
 
-Your turn has a round limit — if you do not call done, the eval runs on whatever file state you left.`
+If you do not call done, the eval runs on whatever file state you left.`, l.config.Provider.MaxRounds)
 	return prompt
 }
 
@@ -211,10 +213,25 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			return messages, ctx.Err()
 		}
 
+		remaining := maxRounds - round
+
+		// On the final round, strip tools to force a text-only response.
+		reqTools := toolDefs
+		lastRound := remaining == 1
+		if lastRound {
+			reqTools = nil
+		}
+
+		// Inject a budget reminder after the first round.
+		reqSystem := system
+		if round > 0 {
+			reqSystem = system + "\n\n" + budgetMessage(remaining, lastRound)
+		}
+
 		resp, err := l.provider.Complete(ctx, &llm.Request{
-			System:    system,
+			System:    reqSystem,
 			Messages:  messages,
-			Tools:     toolDefs,
+			Tools:     reqTools,
 			MaxTokens: l.config.Provider.MaxTokens,
 		})
 		if err != nil {
@@ -269,6 +286,18 @@ func (l *Loop) checkCircuitBreaker(consecutiveErrors *int, err error) error {
 		return fmt.Errorf("aborting after %d consecutive errors: %w", *consecutiveErrors, err)
 	}
 	return nil
+}
+
+// budgetMessage returns an escalating urgency reminder based on remaining rounds.
+func budgetMessage(remaining int, toolsDisabled bool) string {
+	switch {
+	case toolsDisabled:
+		return "[FINAL ROUND. Tools are disabled. Summarize what you changed and stop.]"
+	case remaining <= 3:
+		return fmt.Sprintf("[URGENT: %d rounds remaining. Make your final changes NOW and stop.]", remaining)
+	default:
+		return fmt.Sprintf("[%d rounds remaining.]", remaining)
+	}
 }
 
 func (l *Loop) isBetter(current, best float64) bool {

@@ -10,8 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultMaxTokens = 16384
-const DefaultMaxRounds = 20
+const (
+	DefaultMaxTokens = 16384
+	DefaultMaxRounds = 20
+)
 
 // Config is the top-level research configuration loaded from research.yaml.
 type Config struct {

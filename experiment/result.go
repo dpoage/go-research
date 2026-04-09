@@ -46,6 +46,11 @@ func NewResultLogger(path string) (*ResultLogger, error) {
 	return &ResultLogger{path: path}, nil
 }
 
+// Path returns the file path of the result log.
+func (l *ResultLogger) Path() string {
+	return l.path
+}
+
 // ResultEntry is a single row in the result log.
 type ResultEntry struct {
 	Iteration int

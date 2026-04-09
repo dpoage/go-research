@@ -84,6 +84,14 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 		observer = experiment.NewStatusLineObserver()
 	}
 
-	loop := experiment.NewLoop(cfg, provider, executor, eval, git, logger, *resultFile, observer)
+	loop := experiment.NewLoop(experiment.LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: observer,
+	})
 	return loop.Run(ctx, *maxIter)
 }

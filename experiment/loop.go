@@ -16,29 +16,38 @@ import (
 // to avoid blowing the context window.
 const maxToolOutput = 16000
 
-// Loop runs the autonomous experiment cycle.
-type Loop struct {
-	config      *config.Config
-	provider    llm.Provider
-	executor    *tools.Executor
-	eval        *Eval
-	git         *Git
-	logger      *ResultLogger
-	resultsPath string
-	observer    Observer
+// LoopParams holds the dependencies for an experiment Loop.
+type LoopParams struct {
+	Config   *config.Config
+	Provider llm.Provider
+	Executor *tools.Executor
+	Eval     *Eval
+	Git      *Git
+	Logger   *ResultLogger
+	Observer Observer
 }
 
-// NewLoop creates a Loop wired to the given collaborators.
-func NewLoop(cfg *config.Config, provider llm.Provider, executor *tools.Executor, eval *Eval, git *Git, logger *ResultLogger, resultsPath string, observer Observer) *Loop {
+// Loop runs the autonomous experiment cycle.
+type Loop struct {
+	config   *config.Config
+	provider llm.Provider
+	executor *tools.Executor
+	eval     *Eval
+	git      *Git
+	logger   *ResultLogger
+	observer Observer
+}
+
+// NewLoop creates a Loop from the given parameters.
+func NewLoop(p LoopParams) *Loop {
 	return &Loop{
-		config:      cfg,
-		provider:    provider,
-		executor:    executor,
-		eval:        eval,
-		git:         git,
-		logger:      logger,
-		resultsPath: resultsPath,
-		observer:    observer,
+		config:   p.Config,
+		provider: p.Provider,
+		executor: p.Executor,
+		eval:     p.Eval,
+		git:      p.Git,
+		logger:   p.Logger,
+		observer: p.Observer,
 	}
 }
 
@@ -113,7 +122,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			// Log before commit so the results file is included in the snapshot.
 			l.logResult(iter, result, StatusKeep, "")
 
-			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.resultsPath); err != nil {
+			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.logger.Path()); err != nil {
 				l.observer.Warning(fmt.Sprintf("git commit failed: %v", err))
 			}
 		} else {

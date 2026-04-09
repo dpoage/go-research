@@ -10,35 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	DirectionMinimize = "minimize"
-	DirectionMaximize = "maximize"
-
-	BackendAnthropic = "anthropic"
-	BackendOpenAI    = "openai"
-
-	SourceStdout     = "stdout"
-	SourceFilePrefix = "file:"
-
-	DefaultMaxTokens = 16384
-)
-
-// ParseSource classifies an eval.source value.
-// Returns kind ("stdout" or "file") and path (non-empty only for "file").
-func ParseSource(source string) (kind, path string, err error) {
-	switch {
-	case source == "" || source == SourceStdout:
-		return SourceStdout, "", nil
-	case strings.HasPrefix(source, SourceFilePrefix):
-		p := strings.TrimPrefix(source, SourceFilePrefix)
-		if p == "" {
-			return "", "", fmt.Errorf("file source requires a path")
-		}
-		return "file", p, nil
-	default:
-		return "", "", fmt.Errorf("eval.source must be %q or %q<path>, got %q", SourceStdout, SourceFilePrefix, source)
-	}
-}
+const DefaultMaxTokens = 16384
 
 // Config is the top-level research configuration loaded from research.yaml.
 type Config struct {
@@ -51,20 +23,20 @@ type Config struct {
 
 // EvalConfig defines how experiments are evaluated.
 type EvalConfig struct {
-	Command   string   `yaml:"command"`
-	Metric    string   `yaml:"metric"`
-	Source    string   `yaml:"source"`
-	Direction string   `yaml:"direction"`
-	Timeout   Duration `yaml:"timeout"`
+	Command   string    `yaml:"command"`
+	Metric    string    `yaml:"metric"`
+	Source    Source    `yaml:"source"`
+	Direction Direction `yaml:"direction"`
+	Timeout   Duration  `yaml:"timeout"`
 }
 
 // ProviderConfig selects and configures the LLM backend.
 type ProviderConfig struct {
-	Backend   string `yaml:"backend"`
-	Model     string `yaml:"model"`
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"api_key_env"`
-	MaxTokens int    `yaml:"max_tokens"`
+	Backend   Backend `yaml:"backend"`
+	Model     string  `yaml:"model"`
+	URL       string  `yaml:"url"`
+	APIKeyEnv string  `yaml:"api_key_env"`
+	MaxTokens int     `yaml:"max_tokens"`
 }
 
 // GitConfig controls git integration for experiment tracking.
@@ -104,6 +76,10 @@ func (c *Config) applyDefaults() {
 	if c.Git.BranchPrefix == "" {
 		c.Git.BranchPrefix = "research/"
 	}
+	// Default source to stdout when not specified in YAML.
+	if c.Eval.Source.Kind == "" {
+		c.Eval.Source = SourceStdout
+	}
 }
 
 func (c *Config) validate() error {
@@ -119,25 +95,17 @@ func (c *Config) validate() error {
 	if c.Eval.Metric == "" {
 		return fmt.Errorf("eval.metric is required")
 	}
-	switch c.Eval.Direction {
-	case DirectionMinimize, DirectionMaximize:
-		// ok
-	case "":
-		return fmt.Errorf("eval.direction is required (minimize or maximize)")
-	default:
-		return fmt.Errorf("eval.direction must be 'minimize' or 'maximize', got %q", c.Eval.Direction)
-	}
-	if _, _, err := ParseSource(c.Eval.Source); err != nil {
-		return err
-	}
-	if strings.HasPrefix(c.Eval.Source, SourceFilePrefix) && strings.HasPrefix(c.Eval.Metric, SourceFilePrefix) {
-		return fmt.Errorf("eval.source and eval.metric cannot both use %q prefix", SourceFilePrefix)
+	if c.Eval.Direction == "" {
+		return fmt.Errorf("eval.direction is required")
 	}
 	if c.Provider.Backend == "" {
 		return fmt.Errorf("provider.backend is required")
 	}
 	if c.Provider.Model == "" {
 		return fmt.Errorf("provider.model is required")
+	}
+	if c.Eval.Source.IsFile() && strings.HasPrefix(c.Eval.Metric, "file:") {
+		return fmt.Errorf("eval.source and eval.metric cannot both use %q prefix", "file:")
 	}
 	return nil
 }

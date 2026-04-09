@@ -28,7 +28,7 @@ func runStatus(gf globalFlags, args []string) error {
 	}
 
 	// Load config for direction; fall back to showing metric without direction label.
-	direction := ""
+	var direction config.Direction
 	cfg, cfgErr := config.Load(gf.config)
 	if cfgErr == nil {
 		direction = cfg.Eval.Direction
@@ -53,7 +53,7 @@ func runStatus(gf globalFlags, args []string) error {
 	fmt.Printf("Iterations:  %d\n", iterCount)
 	if hasBest {
 		if direction != "" {
-			fmt.Printf("Best metric: %.6f (%s)\n", bestMetric, direction)
+			fmt.Printf("Best metric: %.6f (%v)\n", bestMetric, direction)
 		} else {
 			fmt.Printf("Best metric: %.6f\n", bestMetric)
 		}
@@ -70,7 +70,7 @@ func runStatus(gf globalFlags, args []string) error {
 }
 
 // bestKeptMetric returns the best metric value among "keep" rows, respecting direction.
-func bestKeptMetric(rows []resultRow, direction string) (float64, bool) {
+func bestKeptMetric(rows []resultRow, direction config.Direction) (float64, bool) {
 	best := math.NaN()
 	found := false
 

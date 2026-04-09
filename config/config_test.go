@@ -39,14 +39,14 @@ git:
 	if len(cfg.Files) != 1 || cfg.Files[0] != "train.py" {
 		t.Errorf("files = %v, want [train.py]", cfg.Files)
 	}
-	if cfg.Eval.Direction != "minimize" {
-		t.Errorf("direction = %q, want %q", cfg.Eval.Direction, "minimize")
+	if cfg.Eval.Direction != DirectionMinimize {
+		t.Errorf("direction = %q, want %q", cfg.Eval.Direction, DirectionMinimize)
 	}
 	if cfg.Eval.Timeout.Duration != 5*time.Minute {
 		t.Errorf("timeout = %v, want 5m", cfg.Eval.Timeout)
 	}
-	if cfg.Provider.Backend != "anthropic" {
-		t.Errorf("backend = %q, want %q", cfg.Provider.Backend, "anthropic")
+	if cfg.Provider.Backend != BackendAnthropic {
+		t.Errorf("backend = %q, want %q", cfg.Provider.Backend, BackendAnthropic)
 	}
 	if cfg.Provider.MaxTokens != 16384 {
 		t.Errorf("max_tokens = %d, want 16384 (default)", cfg.Provider.MaxTokens)
@@ -144,7 +144,7 @@ provider:
   backend: anthropic
   model: claude-sonnet-4-20250514
 `,
-			want: "must be 'minimize' or 'maximize'",
+			want: "direction must be",
 		},
 		{
 			name: "missing provider backend",
@@ -195,8 +195,8 @@ provider:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Eval.Source != "file:results.json" {
-		t.Errorf("source = %q, want %q", cfg.Eval.Source, "file:results.json")
+	if !cfg.Eval.Source.IsFile() || cfg.Eval.Source.Path != "results.json" {
+		t.Errorf("source = %v, want file:results.json", cfg.Eval.Source)
 	}
 }
 

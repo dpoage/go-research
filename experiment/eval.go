@@ -25,12 +25,8 @@ func NewEval(cfg config.EvalConfig) (*Eval, error) {
 		return nil, err
 	}
 
-	kind, path, err := config.ParseSource(cfg.Source)
-	if err != nil {
-		return nil, err
-	}
-	if kind == "file" {
-		ext = NewFileSourceFromParts(path, ext)
+	if cfg.Source.IsFile() {
+		ext = NewFileSourceFromParts(cfg.Source.Path, ext)
 	}
 
 	return &Eval{

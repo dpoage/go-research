@@ -126,7 +126,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 }
 
 func (l *Loop) buildPrompt(iter int, bestMetric float64) string {
-	prompt := fmt.Sprintf("Iteration %d.\n\nAllowed files: %v\nEval command: %s\nDirection: %s\n",
+	prompt := fmt.Sprintf("Iteration %d.\n\nAllowed files: %v\nEval command: %s\nDirection: %v\n",
 		iter, l.config.Files, l.config.Eval.Command, l.config.Eval.Direction)
 
 	if !math.IsNaN(bestMetric) {

@@ -121,7 +121,7 @@ func NewProvider(cfg config.ProviderConfig) (Provider, error) {
 	case config.BackendOpenAI:
 		p, err = NewOpenAI(cfg)
 	default:
-		return nil, fmt.Errorf("unknown provider backend: %q", cfg.Backend)
+		return nil, fmt.Errorf("unknown provider backend: %q", string(cfg.Backend))
 	}
 	if err != nil {
 		return nil, err

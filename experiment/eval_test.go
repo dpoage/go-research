@@ -11,7 +11,7 @@ import (
 	"github.com/dpoage/go-research/config"
 )
 
-func evalCfg(command, metric, source string, timeout time.Duration) config.EvalConfig {
+func evalCfg(command, metric string, source config.Source, timeout time.Duration) config.EvalConfig {
 	return config.EvalConfig{
 		Command:   command,
 		Metric:    metric,
@@ -22,7 +22,7 @@ func evalCfg(command, metric, source string, timeout time.Duration) config.EvalC
 }
 
 func TestNewEval_ValidPattern(t *testing.T) {
-	ev, err := NewEval(evalCfg("echo 'accuracy: 0.95'", `accuracy:\s+(\d+\.\d+)`, "", 5*time.Second))
+	ev, err := NewEval(evalCfg("echo 'accuracy: 0.95'", `accuracy:\s+(\d+\.\d+)`, config.SourceStdout, 5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,21 +32,21 @@ func TestNewEval_ValidPattern(t *testing.T) {
 }
 
 func TestNewEval_NoCaptureGroup(t *testing.T) {
-	_, err := NewEval(evalCfg("echo test", `accuracy`, "", 5*time.Second))
+	_, err := NewEval(evalCfg("echo test", `accuracy`, config.SourceStdout, 5*time.Second))
 	if err == nil {
 		t.Error("expected error for pattern without capture group")
 	}
 }
 
 func TestNewEval_InvalidRegex(t *testing.T) {
-	_, err := NewEval(evalCfg("echo test", `(unclosed`, "", 5*time.Second))
+	_, err := NewEval(evalCfg("echo test", `(unclosed`, config.SourceStdout, 5*time.Second))
 	if err == nil {
 		t.Error("expected error for invalid regex")
 	}
 }
 
 func TestEval_Run_Success(t *testing.T) {
-	ev, err := NewEval(evalCfg("echo 'loss: 0.042'", `loss:\s+(\d+\.\d+)`, "", 5*time.Second))
+	ev, err := NewEval(evalCfg("echo 'loss: 0.042'", `loss:\s+(\d+\.\d+)`, config.SourceStdout, 5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestEval_Run_Success(t *testing.T) {
 }
 
 func TestEval_Run_CommandFailure(t *testing.T) {
-	ev, err := NewEval(evalCfg("exit 1", `(\d+)`, "", 5*time.Second))
+	ev, err := NewEval(evalCfg("exit 1", `(\d+)`, config.SourceStdout, 5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestEval_Run_CommandFailure(t *testing.T) {
 }
 
 func TestEval_Run_NoMatch(t *testing.T) {
-	ev, err := NewEval(evalCfg("echo 'no metric here'", `accuracy:\s+(\d+\.\d+)`, "", 5*time.Second))
+	ev, err := NewEval(evalCfg("echo 'no metric here'", `accuracy:\s+(\d+\.\d+)`, config.SourceStdout, 5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestEval_Run_NoMatch(t *testing.T) {
 }
 
 func TestEval_Run_Timeout(t *testing.T) {
-	ev, err := NewEval(evalCfg("sleep 10", `(\d+)`, "", 100*time.Millisecond))
+	ev, err := NewEval(evalCfg("sleep 10", `(\d+)`, config.SourceStdout, 100*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestNewEval_WithFileSource(t *testing.T) {
 	metricFile := filepath.Join(dir, "metrics.txt")
 	os.WriteFile(metricFile, []byte("accuracy: 0.97\n"), 0o644)
 
-	ev, err := NewEval(evalCfg("echo 'no metric here'", `accuracy:\s+(\d+\.\d+)`, "file:"+metricFile, 5*time.Second))
+	ev, err := NewEval(evalCfg("echo 'no metric here'", `accuracy:\s+(\d+\.\d+)`, config.Source{Kind: "file", Path: metricFile}, 5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestNewEval_WithFileSource(t *testing.T) {
 }
 
 func TestNewEval_StdoutSource(t *testing.T) {
-	ev, err := NewEval(evalCfg("echo 'loss: 0.05'", `loss:\s+(\d+\.\d+)`, "stdout", 5*time.Second))
+	ev, err := NewEval(evalCfg("echo 'loss: 0.05'", `loss:\s+(\d+\.\d+)`, config.SourceStdout, 5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +133,14 @@ func TestNewEval_StdoutSource(t *testing.T) {
 	}
 }
 
-func TestNewEval_InvalidSource(t *testing.T) {
-	_, err := NewEval(evalCfg("echo test", `(\d+)`, "unknown:foo", 5*time.Second))
-	if err == nil {
-		t.Error("expected error for unknown source")
+func TestNewEval_FileSourceKind(t *testing.T) {
+	// Verify that a file source is wired correctly even when the file doesn't
+	// exist at construction time (the extractor only reads at Extract time).
+	ev, err := NewEval(evalCfg("echo ignored", `(\d+)`, config.Source{Kind: "file", Path: "/tmp/nonexistent"}, 5*time.Second))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ev == nil {
+		t.Fatal("expected non-nil Eval")
 	}
 }

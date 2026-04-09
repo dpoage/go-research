@@ -12,7 +12,7 @@ import (
 )
 
 // configProviderConfig is a test helper to create a ProviderConfig.
-func configProviderConfig(backend, model string) config.ProviderConfig {
+func configProviderConfig(backend config.Backend, model string) config.ProviderConfig {
 	return config.ProviderConfig{
 		Backend:   backend,
 		Model:     model,

@@ -74,9 +74,9 @@ func checkFiles(cfg *config.Config) []checkResult {
 			missing = append(missing, f)
 		}
 	}
-	if kind, path, _ := config.ParseSource(cfg.Eval.Source); kind == "file" {
-		if _, err := os.Stat(path); err != nil {
-			missing = append(missing, path)
+	if cfg.Eval.Source.IsFile() {
+		if _, err := os.Stat(cfg.Eval.Source.Path); err != nil {
+			missing = append(missing, cfg.Eval.Source.Path)
 		}
 	}
 	if len(missing) > 0 {

@@ -68,7 +68,7 @@ func runRun(ctx context.Context, gf globalFlags, args []string) error {
 	}
 
 	if !gf.quiet {
-		fmt.Printf("Config: %s/%s, eval=%q, direction=%s\n",
+		fmt.Printf("Config: %v/%s, eval=%q, direction=%v\n",
 			cfg.Provider.Backend, cfg.Provider.Model,
 			cfg.Eval.Command, cfg.Eval.Direction)
 		if *maxIter > 0 {

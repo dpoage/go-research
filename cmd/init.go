@@ -14,10 +14,13 @@ import (
 
 // Default flag values for init.
 const (
+	defaultModel   = "claude-sonnet-4-20250514"
+	defaultTimeout = "5m"
+)
+
+var (
 	defaultDirection = config.DirectionMinimize
 	defaultBackend   = config.BackendAnthropic
-	defaultModel     = "claude-sonnet-4-20250514"
-	defaultTimeout   = "5m"
 )
 
 // Counter example content scaffolded when no --file flags are given.
@@ -100,9 +103,9 @@ type initParams struct {
 	Files      []string
 	Eval       string
 	Metric     string
-	Direction  string
+	Direction  config.Direction
 	Timeout    string
-	Backend    string
+	Backend    config.Backend
 	Model      string
 	APIKeyEnv  string
 	MaxTokens  int
@@ -115,8 +118,8 @@ func runInit(args []string) error {
 	files := fs.StringSlice("file", nil, "editable file(s)")
 	eval := fs.String("eval", "", "eval command")
 	metric := fs.String("metric", "", "metric regex")
-	direction := fs.String("direction", defaultDirection, "minimize or maximize")
-	backend := fs.String("backend", defaultBackend, "LLM backend (anthropic or openai)")
+	direction := fs.String("direction", string(defaultDirection), "minimize or maximize")
+	backend := fs.String("backend", string(defaultBackend), "LLM backend (anthropic or openai)")
 	model := fs.String("model", defaultModel, "LLM model name")
 	timeout := fs.String("timeout", defaultTimeout, "eval timeout (e.g. 5m, 30s)")
 	if err := fs.Parse(args); err != nil {
@@ -130,10 +133,10 @@ func runInit(args []string) error {
 		Files:     *files,
 		Eval:      *eval,
 		Metric:    *metric,
-		Direction: *direction,
-		Backend:   *backend,
-		Model:     *model,
+		Direction: config.Direction(*direction),
 		Timeout:   *timeout,
+		Backend:   config.Backend(*backend),
+		Model:     *model,
 	})
 }
 
@@ -217,7 +220,7 @@ func renderTemplate(tmpl string, data any) (string, error) {
 	return buf.String(), nil
 }
 
-func apiKeyEnvForBackend(backend string) string {
+func apiKeyEnvForBackend(backend config.Backend) string {
 	switch backend {
 	case config.BackendOpenAI:
 		return "OPENAI_API_KEY"

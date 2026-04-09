@@ -103,8 +103,8 @@ eval:
 
 ### `file:` shorthand in metric
 
-For backward compatibility, the metric field accepts `file:<path>:<extractor>`
-as shorthand for setting both source and extractor in one field:
+The metric field also accepts `file:<path>:<extractor>` as a shorthand that
+combines source and extractor in one field:
 
 ```yaml
 metric: 'file:results.json:jq:.loss'
@@ -113,7 +113,7 @@ metric: 'file:log.txt:regex:score:\s+([0-9.]+)'
 ```
 
 This is equivalent to setting `source: file:<path>` and `metric: <extractor>`
-separately. The `eval.source` field is the preferred approach for new configs.
+separately. Using separate fields is clearer for new configs.
 
 ## Eval requirements
 

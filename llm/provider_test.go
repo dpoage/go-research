@@ -2,6 +2,8 @@ package llm
 
 import (
 	"testing"
+
+	"github.com/dpoage/go-research/config"
 )
 
 func TestResponse_ToolUseBlocks(t *testing.T) {
@@ -66,7 +68,7 @@ func TestNewToolResultMessage(t *testing.T) {
 }
 
 func TestNewProvider_UnknownBackend(t *testing.T) {
-	_, err := NewProvider(configProviderConfig("unknown", "model"))
+	_, err := NewProvider(configProviderConfig(config.Backend("unknown"), "model"))
 	if err == nil {
 		t.Fatal("expected error for unknown backend")
 	}

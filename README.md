@@ -1,5 +1,10 @@
 # go-research
 
+[![CI](https://github.com/dpoage/go-research/actions/workflows/ci.yml/badge.svg)](https://github.com/dpoage/go-research/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/dpoage/go-research/branch/master/graph/badge.svg)](https://codecov.io/gh/dpoage/go-research)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dpoage/go-research)](https://goreportcard.com/report/github.com/dpoage/go-research)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dpoage/go-research.svg)](https://pkg.go.dev/github.com/dpoage/go-research)
+
 An autonomous experiment loop for any domain. Point it at your code, give it an
 eval command and a metric to optimize, and let an LLM iteratively propose
 changes — keeping improvements, reverting failures.
@@ -154,6 +159,3 @@ When `git.enabled` is true, each run creates a branch (e.g.
 `research/20260407-143022`). Improvements are committed; failed experiments are
 reverted. Results are logged to `results.tsv`.
 
-## License
-
-MIT

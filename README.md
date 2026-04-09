@@ -69,6 +69,67 @@ git:
   branch_prefix: "research/"
 ```
 
+## Metric extraction
+
+The `eval.metric` field controls how the numeric metric is extracted after each
+eval command runs. Four formats are supported:
+
+### Regex (default)
+
+A regex with a capture group, applied to combined stdout+stderr:
+
+```yaml
+metric: 'val_loss:\s+([0-9.]+)'
+# or explicitly: metric: 'regex:val_loss:\s+([0-9.]+)'
+```
+
+The first capture group must match a number parseable as a float.
+
+### JSON path
+
+Extract a value from JSON output using a dot-separated path:
+
+```yaml
+metric: 'jq:.results.val_bpb'
+```
+
+Supports nested objects (`jq:.a.b.c`) and array indices (`jq:.[0].score`).
+
+### Last number
+
+Grab the last numeric value from the output — useful for simple scripts:
+
+```yaml
+metric: last-number
+```
+
+Matches integers, decimals, and scientific notation (e.g. `1.23e-4`).
+
+### File
+
+Read a metric from a file instead of command output. Composes with any of the
+above extractors:
+
+```yaml
+metric: 'file:results.json:jq:.loss'
+metric: 'file:output.txt:last-number'
+metric: 'file:log.txt:regex:score:\s+([0-9.]+)'
+```
+
+## Eval requirements
+
+The eval command must:
+
+- **Exit 0 on success.** A non-zero exit code is treated as a failed experiment
+  (the change is reverted without checking the metric).
+- **Produce a metric.** Either print it to stdout/stderr (for regex, jq,
+  last-number extractors) or write it to a file (for the file extractor).
+
+The command runs via `sh -c`, so it uses POSIX shell — not bash. If you need
+bash features, call `bash -c "..."` or point at a bash script.
+
+When `git.enabled` is true, the project directory must be a git repository.
+
 ## Commands
 
 | Command    | Description                                      |

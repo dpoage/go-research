@@ -106,14 +106,17 @@ func checkEval(cfg *config.Config) []checkResult {
 	result := ev.Run(ctx)
 	if result.Error != nil {
 		errMsg := result.Error.Error()
-		if strings.Contains(errMsg, "metric pattern") {
+		// If the error mentions "eval command failed", it's a command failure.
+		// Otherwise it's a metric extraction failure (the command ran but
+		// the extractor couldn't find a metric in the output).
+		if strings.Contains(errMsg, "eval command failed") {
 			return []checkResult{
-				{name: "eval command runs", ok: true},
-				{name: "metric extracted", ok: false, msg: errMsg},
+				{name: "eval command runs", ok: false, msg: errMsg},
 			}
 		}
 		return []checkResult{
-			{name: "eval command runs", ok: false, msg: errMsg},
+			{name: "eval command runs", ok: true},
+			{name: "metric extracted", ok: false, msg: errMsg},
 		}
 	}
 

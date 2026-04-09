@@ -6,32 +6,27 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"regexp"
-	"strconv"
 	"time"
 )
 
 // Eval runs an evaluation command and extracts a numeric metric from its output.
 type Eval struct {
-	Command string
-	Metric  *regexp.Regexp
-	Timeout time.Duration
+	Command   string
+	Extractor MetricExtractor
+	Timeout   time.Duration
 }
 
 // NewEval creates an Eval from the config fields.
-// The metric pattern must contain exactly one capturing group that matches a number.
+// The metricPattern is parsed by NewExtractor to select the appropriate backend.
 func NewEval(command, metricPattern string, timeout time.Duration) (*Eval, error) {
-	re, err := regexp.Compile(metricPattern)
+	ext, err := NewExtractor(metricPattern)
 	if err != nil {
-		return nil, fmt.Errorf("compile metric pattern: %w", err)
-	}
-	if re.NumSubexp() < 1 {
-		return nil, fmt.Errorf("metric pattern must contain at least one capturing group, got %q", metricPattern)
+		return nil, err
 	}
 	return &Eval{
-		Command: command,
-		Metric:  re,
-		Timeout: timeout,
+		Command:   command,
+		Extractor: ext,
+		Timeout:   timeout,
 	}, nil
 }
 
@@ -76,7 +71,7 @@ func (e *Eval) Run(ctx context.Context) EvalResult {
 		}
 	}
 
-	metric, err := extractMetric(e.Metric, combined)
+	metric, err := e.Extractor.Extract(combined)
 	if err != nil {
 		return EvalResult{
 			Output:  combined,
@@ -90,16 +85,4 @@ func (e *Eval) Run(ctx context.Context) EvalResult {
 		Output:  combined,
 		Elapsed: elapsed,
 	}
-}
-
-func extractMetric(re *regexp.Regexp, output string) (float64, error) {
-	matches := re.FindStringSubmatch(output)
-	if matches == nil {
-		return 0, fmt.Errorf("metric pattern %q did not match output", re.String())
-	}
-	val, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse metric value %q: %w", matches[1], err)
-	}
-	return val, nil
 }

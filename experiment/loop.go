@@ -82,8 +82,8 @@ func ToolDefs() []llm.ToolDef {
 		},
 		{
 			Name:        tools.ToolDone,
-			Description: "Signal that you have finished making changes for this iteration. Call this when your change is complete.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string","description":"Brief description of the change you made"}}}`),
+			Description: "End your turn and trigger the eval. Call this after you have made and tested your change. Every iteration MUST end with a done call.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string","description":"Brief description of the change you made"}},"required":["summary"]}`),
 		},
 	}
 }
@@ -186,10 +186,15 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 		}
 	}
 
-	prompt += fmt.Sprintf(`
-Make exactly ONE focused change per iteration.
-You have %d tool rounds. After that, your turn ends and the eval runs on the current file state.
-Call the done tool when you have finished your change.`, l.config.Provider.MaxRounds)
+	prompt += `
+
+Steps:
+1. Read the files you need to understand the current state.
+2. Make one focused improvement.
+3. Optionally run a quick test to verify your change.
+4. Call done with a summary of what you changed.
+
+Your turn has a round limit. If you do not call done, the eval runs on whatever file state you left — incomplete changes will likely be discarded.`
 	return prompt
 }
 

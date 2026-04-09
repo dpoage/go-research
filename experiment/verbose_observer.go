@@ -3,6 +3,8 @@ package experiment
 import (
 	"fmt"
 	"time"
+
+	"github.com/dpoage/go-research/display"
 )
 
 // VerboseObserver prints detailed output for every loop event,
@@ -18,7 +20,7 @@ func (VerboseObserver) AgentText(text string) {
 }
 
 func (VerboseObserver) ToolCall(name, output string) {
-	fmt.Printf("Tool %s: %s\n", name, truncateDisplay(output, 200))
+	fmt.Printf("Tool %s: %s\n", name, display.Truncate(output, 200))
 }
 
 func (VerboseObserver) EvalStarted() {
@@ -30,11 +32,11 @@ func (VerboseObserver) EvalResult(_ int, metric float64, elapsed time.Duration) 
 }
 
 func (VerboseObserver) Improvement(_ int, _, previousBest float64) {
-	fmt.Printf("Improvement! (previous best: %v)\n", formatMetric(previousBest))
+	fmt.Printf("Improvement! (previous best: %v)\n", display.FormatMetric(previousBest))
 }
 
 func (VerboseObserver) NoImprovement(_ int, _ float64, best float64) {
-	fmt.Printf("No improvement (best: %v). Reverting.\n", formatMetric(best))
+	fmt.Printf("No improvement (best: %v). Reverting.\n", display.FormatMetric(best))
 }
 
 func (VerboseObserver) IterationError(iter int, err error) {
@@ -46,5 +48,5 @@ func (VerboseObserver) Warning(msg string) {
 }
 
 func (VerboseObserver) Complete(bestMetric float64) {
-	fmt.Printf("\nDone. Best metric: %v\n", formatMetric(bestMetric))
+	fmt.Printf("\nDone. Best metric: %v\n", display.FormatMetric(bestMetric))
 }

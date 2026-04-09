@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dpoage/go-research/display"
 )
@@ -96,12 +97,13 @@ func (o *StatusLineObserver) render(activity string) {
 	fmt.Fprintf(&b, " │ %s", activity)
 
 	line := b.String()
+	width := utf8.RuneCountInString(line)
 
 	// Pad with spaces to overwrite any previous longer line.
-	if len(line) < o.lastLen {
-		line += strings.Repeat(" ", o.lastLen-len(line))
+	if width < o.lastLen {
+		line += strings.Repeat(" ", o.lastLen-width)
 	}
-	o.lastLen = len(line)
+	o.lastLen = width
 
 	fmt.Fprintf(os.Stderr, "\r%s", line)
 }

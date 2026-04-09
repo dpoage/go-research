@@ -88,7 +88,8 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 		// Run tool-use turns until the model stops requesting tools.
 		messages, err = l.toolLoop(ctx, system, messages, toolDefs)
 		if err != nil {
-			l.logError(iter, err)
+			l.observer.IterationError(iter, err)
+			l.logResult(iter, EvalResult{Error: err}, StatusError, err.Error())
 			continue
 		}
 
@@ -214,29 +215,4 @@ func (l *Loop) logResult(iter int, result EvalResult, status Status, note string
 	}); err != nil {
 		l.observer.Warning(fmt.Sprintf("log result failed: %v", err))
 	}
-}
-
-func (l *Loop) logError(iter int, err error) {
-	l.observer.IterationError(iter, err)
-	if logErr := l.logger.Append(ResultEntry{
-		Iteration: iter,
-		Status:    StatusError,
-		Note:      err.Error(),
-	}); logErr != nil {
-		l.observer.Warning(fmt.Sprintf("log error failed: %v", logErr))
-	}
-}
-
-func formatMetric(v float64) string {
-	if math.IsNaN(v) {
-		return "none"
-	}
-	return fmt.Sprintf("%.6f", v)
-}
-
-func truncateDisplay(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }

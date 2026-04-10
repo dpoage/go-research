@@ -116,12 +116,6 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 		prompt := l.buildPrompt(iter, bestMetric, lastResult)
 		messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, prompt)}
 
-		// Pre-seed file contents as a synthetic "turn 0" so the agent
-		// doesn't burn real tool rounds reading files it will always need.
-		// This sits after the user prompt, keeping the system prompt stable
-		// for caching while giving the agent immediate orientation.
-		messages = l.prefillFileContents(messages)
-
 		// Run tool-use turns until the model stops requesting tools.
 		var stats ToolLoopStats
 		messages, stats, err = l.toolLoop(ctx, system, messages, toolDefs)
@@ -206,12 +200,14 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 	// Protocol — terse instructions the model can scan quickly.
 	fmt.Fprintf(&b, `
 ### Protocol
-1. Read only what you need
-2. Make ONE focused change
-3. Call done with a summary
+1. Make ONE focused change
+2. Call done with a summary
 
-Budget: %d tool rounds. The harness reverts if the metric doesn't improve, so always call done — don't overthink it.
+Budget: %d tool rounds (read_file calls are free). The harness reverts if the metric doesn't improve, so always call done — don't overthink it.
 `, l.config.Provider.MaxRounds)
+
+	// Inline current file contents so the agent can act immediately.
+	l.appendFileContents(&b)
 
 	return b.String()
 }
@@ -226,88 +222,57 @@ const maxPrefillBytes = 16000
 // rounds have their tool_result content replaced with a short summary.
 const keepRecentRounds = 3
 
-// prefillFileContents appends a synthetic assistant+user exchange to messages
-// that contains the current contents of the editable files. This lets the
-// agent skip the "read everything" phase that otherwise burns real tool rounds.
-func (l *Loop) prefillFileContents(messages []llm.Message) []llm.Message {
-	type fileEntry struct {
-		path    string
-		content string
-		size    int
-	}
-
-	var included []fileEntry
-	var skipped []fileEntry
+// appendFileContents writes the current contents of the editable files into
+// the prompt so the agent can act immediately without burning tool rounds on
+// initial reads. Files are included in config order until the byte budget is
+// exhausted; oversized files are listed by name and size.
+func (l *Loop) appendFileContents(b *strings.Builder) {
 	budget := maxPrefillBytes
+	b.WriteString("\n### Current file contents\n")
 
+	var anyWritten bool
 	for _, path := range l.config.Files {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			// File might not exist yet; just skip.
-			skipped = append(skipped, fileEntry{path: path, size: -1})
+			fmt.Fprintf(b, "\n**%s** — not found\n", path)
+			anyWritten = true
 			continue
 		}
 		content := string(data)
 		if len(content) <= budget {
-			included = append(included, fileEntry{path: path, content: content, size: len(data)})
+			fmt.Fprintf(b, "\n**%s**\n```\n%s\n```\n", path, content)
 			budget -= len(content)
+			anyWritten = true
 		} else {
-			skipped = append(skipped, fileEntry{path: path, size: len(data)})
+			fmt.Fprintf(b, "\n**%s** — %d bytes, use read_file to view\n", path, len(data))
+			anyWritten = true
 		}
 	}
 
-	if len(included) == 0 && len(skipped) == 0 {
-		return messages
+	if !anyWritten {
+		b.WriteString("(no files configured)\n")
 	}
-
-	// Synthetic assistant message: looks like the agent decided to read files.
-	messages = append(messages, llm.NewTextMessage(llm.RoleAssistant,
-		"I'll review the current file contents before making changes."))
-
-	// Build the synthetic user response with file contents.
-	var blocks []llm.ContentBlock
-	for _, f := range included {
-		blocks = append(blocks, llm.ContentBlock{
-			Type: llm.BlockText,
-			Text: fmt.Sprintf("=== %s ===\n%s", f.path, f.content),
-		})
-	}
-	if len(skipped) > 0 {
-		var note strings.Builder
-		note.WriteString("Files not shown (use read_file to view):")
-		for _, f := range skipped {
-			if f.size >= 0 {
-				fmt.Fprintf(&note, "\n  %s (%d bytes)", f.path, f.size)
-			} else {
-				fmt.Fprintf(&note, "\n  %s (not found)", f.path)
-			}
-		}
-		blocks = append(blocks, llm.ContentBlock{
-			Type: llm.BlockText,
-			Text: note.String(),
-		})
-	}
-
-	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: blocks})
-	return messages
 }
 
 // toolLoop runs LLM completion in a loop, dispatching tool calls until the model
 // calls the done tool, returns end_turn, or exhausts the round budget.
+// Rounds where the only tool calls are read_file are "free" and do not count
+// toward the budget, so the model can orient itself without pressure.
 func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Message, toolDefs []llm.ToolDef) ([]llm.Message, ToolLoopStats, error) {
 	maxRounds := l.config.Provider.MaxRounds
 	var stats ToolLoopStats
+	billed := 0
 
-	for round := range maxRounds {
+	for {
 		if ctx.Err() != nil {
 			return messages, stats, ctx.Err()
 		}
 
-		remaining := maxRounds - round
+		remaining := maxRounds - billed
 
-		// On the final round, strip tools to force a text-only response.
+		// On the final billed round, strip tools to force a text-only response.
 		reqTools := toolDefs
-		if remaining == 1 {
+		if remaining <= 1 {
 			reqTools = nil
 		}
 
@@ -320,7 +285,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			MaxTokens: l.config.Provider.MaxTokens,
 		})
 		if err != nil {
-			return messages, stats, fmt.Errorf("LLM completion (round %d): %w", round+1, err)
+			return messages, stats, fmt.Errorf("LLM completion (round %d): %w", stats.Rounds+1, err)
 		}
 
 		stats.Rounds++
@@ -340,15 +305,21 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 
 		// Dispatch tool calls, collecting results into a single user message.
 		done := false
+		readOnly := true
 		var resultBlocks []llm.ContentBlock
 		for _, tc := range toolCalls {
 			if tc.Name == tools.ToolDone {
 				done = true
+				readOnly = false
 				l.observer.ToolCall(tc.Name, "iteration complete")
 				resultBlocks = append(resultBlocks, llm.ContentBlock{
 					Type: llm.BlockToolResult, ID: tc.ID, Content: "Evaluation will now run.",
 				})
 				continue
+			}
+
+			if tc.Name != tools.ToolReadFile {
+				readOnly = false
 			}
 
 			result := l.executor.Dispatch(ctx, tc.Name, tc.Input)
@@ -364,12 +335,17 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			})
 		}
 
-		// Inject a budget reminder after the first round as a text block
-		// in the same user message. Keeping the system prompt stable
-		// enables provider-side prompt caching.
-		if round > 0 {
+		// Read-only rounds are free; all others consume a billed round.
+		if !readOnly {
+			billed++
+		}
+
+		// Inject a budget reminder as a text block in the tool-result
+		// message. Keeping the system prompt stable enables provider-side
+		// prompt caching.
+		if billed > 0 {
 			resultBlocks = append(resultBlocks, llm.ContentBlock{
-				Type: llm.BlockText, Text: budgetMessage(remaining - 1),
+				Type: llm.BlockText, Text: budgetMessage(maxRounds - billed),
 			})
 		}
 
@@ -378,9 +354,11 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 		if done {
 			return messages, stats, nil
 		}
-	}
 
-	return messages, stats, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+		if billed >= maxRounds {
+			return messages, stats, fmt.Errorf("tool loop exceeded %d rounds", maxRounds)
+		}
+	}
 }
 
 // checkCircuitBreaker increments the consecutive error counter and returns

@@ -742,16 +742,16 @@ func TestLoop_ToolLoop_ExceedsMaxRounds(t *testing.T) {
 	eval, _ := NewEval(cfg.Eval)
 	git := NewGit(false, dir, nil)
 
-	// Build 21 responses that all request a tool call (to trigger "exceeded 20 rounds").
-	// The read_file tool on counter.txt will succeed.
+	// Build responses that all request run_command (to trigger "exceeded N rounds").
+	// read_file rounds are free, so we use run_command to test budget enforcement.
 	var responses []*llm.Response
-	for i := 0; i < 21; i++ {
+	for i := 0; i < config.DefaultMaxRounds+1; i++ {
 		responses = append(responses, &llm.Response{
 			Content: []llm.ContentBlock{{
 				Type:  llm.BlockToolUse,
 				ID:    fmt.Sprintf("call_%d", i),
-				Name:  tools.ToolReadFile,
-				Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				Name:  tools.ToolRunCommand,
+				Input: json.RawMessage(`{"command":"echo hi"}`),
 			}},
 			StopReason: llm.StopToolUse,
 		})
@@ -1362,15 +1362,17 @@ func TestLoop_ToolLoop_CustomMaxRounds(t *testing.T) {
 	eval, _ := NewEval(cfg.Eval)
 	git := NewGit(false, dir, nil)
 
-	// Build 4 responses that all request reads (to exceed MaxRounds=3).
+	// Build 4 responses that all request writes (to exceed MaxRounds=3).
+	// Note: read_file rounds are free and don't count toward the budget,
+	// so we use write_file to test budget enforcement.
 	var responses []*llm.Response
 	for i := 0; i < 4; i++ {
 		responses = append(responses, &llm.Response{
 			Content: []llm.ContentBlock{{
 				Type:  llm.BlockToolUse,
 				ID:    fmt.Sprintf("call_%d", i),
-				Name:  tools.ToolReadFile,
-				Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				Name:  tools.ToolWriteFile,
+				Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"x"}`, counterPath)),
 			}},
 			StopReason: llm.StopToolUse,
 		})
@@ -1402,6 +1404,112 @@ func TestLoop_ToolLoop_CustomMaxRounds(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "3 rounds") {
 		t.Errorf("expected error to mention '3 rounds', got:\n%s", data)
+	}
+}
+
+func TestLoop_ToolLoop_FreeReads(t *testing.T) {
+	// Verify that read_file-only rounds don't count toward the budget.
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	programPath := filepath.Join(dir, "program.md")
+	os.WriteFile(programPath, []byte("test"), 0644)
+	counterPath := filepath.Join(dir, "counter.txt")
+	os.WriteFile(counterPath, []byte("1"), 0644)
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   "sh -c 'echo metric: $(cat counter.txt)'",
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 2},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, _ := NewResultLogger(resultsPath)
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Round 1: read_file (free, doesn't count)
+	// Round 2: read_file (free, doesn't count)
+	// Round 3: write_file (billed, counts as round 1)
+	// Round 4: done (billed, counts as round 2)
+	// With MaxRounds=2, this should succeed — the 2 reads are free.
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "c1", Name: tools.ToolReadFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "c2", Name: tools.ToolReadFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "c3", Name: tools.ToolWriteFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"0"}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "c4", Name: tools.ToolDone,
+					Input: json.RawMessage(`{"summary":"lowered"}`),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+		},
+	}
+
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: VerboseObserver{},
+	})
+
+	if err := loop.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// All 4 rounds should have been called.
+	if provider.calls != 4 {
+		t.Errorf("expected 4 provider calls (2 free reads + 2 billed), got %d", provider.calls)
+	}
+
+	// Should have succeeded (keep), not errored from round limit.
+	data, _ := os.ReadFile(resultsPath)
+	if !strings.Contains(string(data), "keep") {
+		t.Errorf("expected 'keep' (free reads didn't exhaust budget), got:\n%s", data)
 	}
 }
 
@@ -1708,110 +1816,57 @@ func TestBudgetMessage(t *testing.T) {
 	}
 }
 
-func TestPrefillFileContents(t *testing.T) {
+func TestAppendFileContents(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create two small files.
 	f1 := filepath.Join(dir, "a.txt")
 	f2 := filepath.Join(dir, "b.txt")
 	os.WriteFile(f1, []byte("hello"), 0644)
 	os.WriteFile(f2, []byte("world"), 0644)
 
-	cfg := &config.Config{
-		Files: []string{f1, f2},
-	}
-	loop := &Loop{config: cfg}
+	loop := &Loop{config: &config.Config{Files: []string{f1, f2}}}
 
-	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "iteration prompt")}
-	result := loop.prefillFileContents(messages)
+	var b strings.Builder
+	loop.appendFileContents(&b)
+	output := b.String()
 
-	// Should have 3 messages: original user prompt + synthetic assistant + synthetic user.
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(result))
+	if !strings.Contains(output, "hello") || !strings.Contains(output, "world") {
+		t.Errorf("should contain file contents, got: %s", output)
 	}
-	if result[1].Role != llm.RoleAssistant {
-		t.Errorf("messages[1] role = %q, want assistant", result[1].Role)
-	}
-	if result[2].Role != llm.RoleUser {
-		t.Errorf("messages[2] role = %q, want user", result[2].Role)
-	}
-
-	// Verify file contents are present.
-	var allText string
-	for _, b := range result[2].Content {
-		allText += b.Text
-	}
-	if !strings.Contains(allText, "hello") || !strings.Contains(allText, "world") {
-		t.Errorf("prefill should contain file contents, got: %s", allText)
-	}
-	if !strings.Contains(allText, "a.txt") || !strings.Contains(allText, "b.txt") {
-		t.Errorf("prefill should contain file names, got: %s", allText)
+	if !strings.Contains(output, "a.txt") || !strings.Contains(output, "b.txt") {
+		t.Errorf("should contain file names, got: %s", output)
 	}
 }
 
-func TestPrefillFileContents_ExceedsLimit(t *testing.T) {
+func TestAppendFileContents_ExceedsLimit(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create one small file and one large file that exceeds the budget.
 	small := filepath.Join(dir, "small.txt")
 	large := filepath.Join(dir, "large.txt")
 	os.WriteFile(small, []byte("tiny"), 0644)
 	os.WriteFile(large, make([]byte, maxPrefillBytes+1), 0644)
 
-	cfg := &config.Config{
-		Files: []string{small, large},
-	}
-	loop := &Loop{config: cfg}
+	loop := &Loop{config: &config.Config{Files: []string{small, large}}}
 
-	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "prompt")}
-	result := loop.prefillFileContents(messages)
+	var b strings.Builder
+	loop.appendFileContents(&b)
+	output := b.String()
 
-	// Should include the small file and skip the large one.
-	var allText string
-	for _, b := range result[2].Content {
-		allText += b.Text
+	if !strings.Contains(output, "tiny") {
+		t.Errorf("small file should be included: %s", output)
 	}
-	if !strings.Contains(allText, "tiny") {
-		t.Errorf("small file should be included: %s", allText)
-	}
-	if !strings.Contains(allText, "not shown") {
-		t.Errorf("large file should be listed as skipped: %s", allText)
+	if !strings.Contains(output, "use read_file") {
+		t.Errorf("large file should suggest read_file: %s", output)
 	}
 }
 
-func TestPrefillFileContents_MissingFile(t *testing.T) {
-	cfg := &config.Config{
-		Files: []string{"/nonexistent/file.txt"},
-	}
-	loop := &Loop{config: cfg}
+func TestAppendFileContents_MissingFile(t *testing.T) {
+	loop := &Loop{config: &config.Config{Files: []string{"/nonexistent/file.txt"}}}
 
-	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "prompt")}
-	result := loop.prefillFileContents(messages)
+	var b strings.Builder
+	loop.appendFileContents(&b)
 
-	// Should still produce the prefill with a "not found" note.
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(result))
-	}
-	var allText string
-	for _, b := range result[2].Content {
-		allText += b.Text
-	}
-	if !strings.Contains(allText, "not found") {
-		t.Errorf("missing file should be noted: %s", allText)
-	}
-}
-
-func TestPrefillFileContents_NoFiles(t *testing.T) {
-	cfg := &config.Config{
-		Files: []string{},
-	}
-	loop := &Loop{config: cfg}
-
-	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "prompt")}
-	result := loop.prefillFileContents(messages)
-
-	// No files = no prefill added.
-	if len(result) != 1 {
-		t.Errorf("expected 1 message (no prefill), got %d", len(result))
+	if !strings.Contains(b.String(), "not found") {
+		t.Errorf("missing file should be noted: %s", b.String())
 	}
 }

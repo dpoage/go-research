@@ -344,3 +344,140 @@ func TestExecutor_ReadFile_OffsetOnly(t *testing.T) {
 		t.Errorf("expected lines c and d: %s", result.Output)
 	}
 }
+
+func TestExecutor_EditFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "code.py")
+	os.WriteFile(target, []byte("def foo():\n    return 1\n"), 0644)
+
+	sb, _ := NewSandbox(dir, []string{"code.py"})
+	exec := NewExecutor(sb, 0)
+
+	input, _ := json.Marshal(editFileInput{Path: target, Old: "return 1", New: "return 42"})
+	result := exec.Dispatch(context.Background(), ToolEditFile, input)
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+
+	data, _ := os.ReadFile(target)
+	if !strings.Contains(string(data), "return 42") {
+		t.Errorf("edit not applied: %s", data)
+	}
+	if strings.Contains(string(data), "return 1") {
+		t.Errorf("old text still present: %s", data)
+	}
+}
+
+func TestExecutor_EditFile_NotUnique(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "code.py")
+	os.WriteFile(target, []byte("x = 1\ny = 1\n"), 0644)
+
+	sb, _ := NewSandbox(dir, []string{"code.py"})
+	exec := NewExecutor(sb, 0)
+
+	input, _ := json.Marshal(editFileInput{Path: target, Old: "1", New: "2"})
+	result := exec.Dispatch(context.Background(), ToolEditFile, input)
+
+	if !result.IsError {
+		t.Error("expected error for non-unique match")
+	}
+	if !strings.Contains(result.Output, "2 locations") {
+		t.Errorf("expected location count in error: %s", result.Output)
+	}
+}
+
+func TestExecutor_EditFile_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "code.py")
+	os.WriteFile(target, []byte("hello"), 0644)
+
+	sb, _ := NewSandbox(dir, []string{"code.py"})
+	exec := NewExecutor(sb, 0)
+
+	input, _ := json.Marshal(editFileInput{Path: target, Old: "missing", New: "new"})
+	result := exec.Dispatch(context.Background(), ToolEditFile, input)
+
+	if !result.IsError {
+		t.Error("expected error for missing old string")
+	}
+}
+
+func TestExecutor_EditFile_SandboxDenied(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "secret.txt")
+	os.WriteFile(target, []byte("data"), 0644)
+
+	sb, _ := NewSandbox(dir, []string{"other.txt"})
+	exec := NewExecutor(sb, 0)
+
+	input, _ := json.Marshal(editFileInput{Path: target, Old: "data", New: "new"})
+	result := exec.Dispatch(context.Background(), ToolEditFile, input)
+
+	if !result.IsError {
+		t.Error("expected sandbox denial")
+	}
+}
+
+func TestExecutor_Grep(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world\nfoo bar\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("baz hello\n"), 0644)
+
+	sb, _ := NewSandbox(dir, nil)
+	exec := NewExecutor(sb, 5*time.Second)
+
+	input, _ := json.Marshal(grepInput{Pattern: "hello", Path: dir})
+	result := exec.Dispatch(context.Background(), ToolGrep, input)
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "hello world") {
+		t.Errorf("expected match in a.txt: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "baz hello") {
+		t.Errorf("expected match in b.txt: %s", result.Output)
+	}
+}
+
+func TestExecutor_Grep_NoMatches(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("nothing here\n"), 0644)
+
+	sb, _ := NewSandbox(dir, nil)
+	exec := NewExecutor(sb, 5*time.Second)
+
+	input, _ := json.Marshal(grepInput{Pattern: "missing", Path: dir})
+	result := exec.Dispatch(context.Background(), ToolGrep, input)
+
+	if result.IsError {
+		t.Errorf("no-match should not be an error: %s", result.Output)
+	}
+	if result.Output != "no matches" {
+		t.Errorf("expected 'no matches', got: %s", result.Output)
+	}
+}
+
+func TestExecutor_Grep_IncludeFilter(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.py"), []byte("hello\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("hello\n"), 0644)
+
+	sb, _ := NewSandbox(dir, nil)
+	exec := NewExecutor(sb, 5*time.Second)
+
+	input, _ := json.Marshal(grepInput{Pattern: "hello", Path: dir, Include: "*.py"})
+	result := exec.Dispatch(context.Background(), ToolGrep, input)
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "a.py") {
+		t.Errorf("expected a.py match: %s", result.Output)
+	}
+	if strings.Contains(result.Output, "b.txt") {
+		t.Errorf("b.txt should be filtered out: %s", result.Output)
+	}
+}

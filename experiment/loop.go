@@ -80,6 +80,16 @@ func ToolDefs(cfg *config.Config) []llm.ToolDef {
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to write"},"content":{"type":"string","description":"Complete file content to write"}},"required":["path","content"]}`),
 		},
 		{
+			Name:        tools.ToolEditFile,
+			Description: fmt.Sprintf("Replace a unique string in a file with new content. Writable files: [%s]. The old string must appear exactly once.", fileList),
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to edit"},"old":{"type":"string","description":"Exact text to find (must be unique in the file)"},"new":{"type":"string","description":"Replacement text"}},"required":["path","old","new"]}`),
+		},
+		{
+			Name:        tools.ToolGrep,
+			Description: "Search file contents with grep -rn. Free (does not consume a round).",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Search pattern (basic regex)"},"path":{"type":"string","description":"File or directory to search (default: .)"},"include":{"type":"string","description":"Glob pattern to filter files, e.g. *.py"}},"required":["pattern"]}`),
+		},
+		{
 			Name:        tools.ToolRunCommand,
 			Description: "Run a shell command (sh -c). Timeout: 30s. Use for builds/tests; prefer read_file for reading files.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"}},"required":["command"]}`),
@@ -318,7 +328,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 				continue
 			}
 
-			if tc.Name != tools.ToolReadFile {
+			if tc.Name != tools.ToolReadFile && tc.Name != tools.ToolGrep {
 				readOnly = false
 			}
 

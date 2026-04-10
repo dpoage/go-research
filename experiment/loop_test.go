@@ -1168,8 +1168,8 @@ func TestToolDefs(t *testing.T) {
 		Files: []string{"model.py", "train.py"},
 	}
 	defs := ToolDefs(cfg)
-	if len(defs) != 4 {
-		t.Fatalf("expected 4 tool defs, got %d", len(defs))
+	if len(defs) != 6 {
+		t.Fatalf("expected 6 tool defs, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -1182,7 +1182,7 @@ func TestToolDefs(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolRunCommand, tools.ToolDone} {
+	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolGrep, tools.ToolRunCommand, tools.ToolDone} {
 		if !names[expected] {
 			t.Errorf("missing tool def: %s", expected)
 		}

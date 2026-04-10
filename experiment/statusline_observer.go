@@ -65,6 +65,8 @@ func (o *StatusLineObserver) IterationError(_ int, _ error) {
 	o.render("error")
 }
 
+func (o *StatusLineObserver) ToolLoopComplete(_ int, _ ToolLoopStats) {}
+
 func (o *StatusLineObserver) Warning(_ string) {}
 
 func (o *StatusLineObserver) Complete(bestMetric float64) {

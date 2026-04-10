@@ -100,8 +100,8 @@ func TestResultLogger_Append(t *testing.T) {
 
 	// Check first data row.
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 6 {
-		t.Fatalf("expected 6 fields, got %d: %v", len(fields), fields)
+	if len(fields) != 9 {
+		t.Fatalf("expected 9 fields, got %d: %v", len(fields), fields)
 	}
 	if fields[0] != "1" || fields[2] != "keep" {
 		t.Errorf("unexpected fields: %v", fields)
@@ -396,7 +396,7 @@ func TestResultLogger_Append_SanitizesNote(t *testing.T) {
 
 	// The note field should have no tabs or newlines.
 	fields := strings.Split(lines[1], "\t")
-	if len(fields) != 6 {
-		t.Fatalf("expected 6 fields (sanitized note), got %d: %v", len(fields), fields)
+	if len(fields) != 9 {
+		t.Fatalf("expected 9 fields (sanitized note), got %d: %v", len(fields), fields)
 	}
 }

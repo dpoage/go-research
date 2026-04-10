@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const resultHeader = "iteration\tmetric\tstatus\telapsed_ms\ttimestamp\tnote"
+const resultHeader = "iteration\tmetric\tstatus\telapsed_ms\ttimestamp\trounds\tinput_tokens\toutput_tokens\tnote"
 
 // Status represents the outcome of an experiment iteration.
 type Status string
@@ -53,11 +53,14 @@ func (l *ResultLogger) Path() string {
 
 // ResultEntry is a single row in the result log.
 type ResultEntry struct {
-	Iteration int
-	Metric    float64
-	Status    Status
-	Elapsed   time.Duration
-	Note      string
+	Iteration    int
+	Metric       float64
+	Status       Status
+	Elapsed      time.Duration
+	Note         string
+	Rounds       int
+	InputTokens  int
+	OutputTokens int
 }
 
 // Append writes a result entry to the TSV log.
@@ -68,12 +71,15 @@ func (l *ResultLogger) Append(entry ResultEntry) error {
 		return s
 	}
 
-	line := fmt.Sprintf("%d\t%.6f\t%s\t%d\t%s\t%s\n",
+	line := fmt.Sprintf("%d\t%.6f\t%s\t%d\t%s\t%d\t%d\t%d\t%s\n",
 		entry.Iteration,
 		entry.Metric,
 		sanitize(string(entry.Status)),
 		entry.Elapsed.Milliseconds(),
 		time.Now().UTC().Format(time.RFC3339),
+		entry.Rounds,
+		entry.InputTokens,
+		entry.OutputTokens,
 		sanitize(entry.Note),
 	)
 
@@ -95,12 +101,15 @@ func (l *ResultLogger) Append(entry ResultEntry) error {
 
 // ResultRow is a parsed row from a results TSV file.
 type ResultRow struct {
-	Iteration int
-	Metric    float64
-	Status    Status
-	ElapsedMs int64
-	Timestamp string
-	Note      string
+	Iteration    int
+	Metric       float64
+	Status       Status
+	ElapsedMs    int64
+	Timestamp    string
+	Rounds       int
+	InputTokens  int
+	OutputTokens int
+	Note         string
 }
 
 // ParseResults reads and parses a TSV results file, skipping the header line.
@@ -150,19 +159,28 @@ func ParseResults(path string) ([]ResultRow, error) {
 			return nil, fmt.Errorf("line %d: invalid elapsed_ms %q: %w", lineNum, fields[3], err)
 		}
 
-		var note string
-		if len(fields) >= 6 {
-			note = fields[5]
-		}
-
-		rows = append(rows, ResultRow{
+		row := ResultRow{
 			Iteration: iter,
 			Metric:    metric,
 			Status:    Status(fields[2]),
 			ElapsedMs: elapsed,
 			Timestamp: fields[4],
-			Note:      note,
-		})
+		}
+
+		// Parse optional token/round fields (added in newer format).
+		if len(fields) >= 8 {
+			row.Rounds, _ = strconv.Atoi(fields[5])
+			row.InputTokens, _ = strconv.Atoi(fields[6])
+			row.OutputTokens, _ = strconv.Atoi(fields[7])
+		}
+		if len(fields) >= 9 {
+			row.Note = fields[8]
+		} else if len(fields) >= 6 {
+			// Legacy format: note was at index 5.
+			row.Note = fields[5]
+		}
+
+		rows = append(rows, row)
 	}
 
 	if err := scanner.Err(); err != nil {

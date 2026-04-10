@@ -221,6 +221,11 @@ Budget: %d tool rounds. The harness reverts if the metric doesn't improve, so al
 // budget is exhausted; any remaining files are listed by name and size.
 const maxPrefillBytes = 16000
 
+// keepRecentRounds is the number of most-recent tool-use rounds whose
+// tool_result content is preserved verbatim by compressHistory. Older
+// rounds have their tool_result content replaced with a short summary.
+const keepRecentRounds = 3
+
 // prefillFileContents appends a synthetic assistant+user exchange to messages
 // that contains the current contents of the editable files. This lets the
 // agent skip the "read everything" phase that otherwise burns real tool rounds.
@@ -256,13 +261,8 @@ func (l *Loop) prefillFileContents(messages []llm.Message) []llm.Message {
 	}
 
 	// Synthetic assistant message: looks like the agent decided to read files.
-	messages = append(messages, llm.Message{
-		Role: llm.RoleAssistant,
-		Content: []llm.ContentBlock{{
-			Type: llm.BlockText,
-			Text: "I'll review the current file contents before making changes.",
-		}},
-	})
+	messages = append(messages, llm.NewTextMessage(llm.RoleAssistant,
+		"I'll review the current file contents before making changes."))
 
 	// Build the synthetic user response with file contents.
 	var blocks []llm.ContentBlock
@@ -311,8 +311,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			reqTools = nil
 		}
 
-		// Compress old tool results to keep context size manageable.
-		compressed := compressHistory(messages, 3)
+		compressed := compressHistory(messages, keepRecentRounds)
 
 		resp, err := l.provider.Complete(ctx, &llm.Request{
 			System:    system,
@@ -409,8 +408,7 @@ func budgetMessage(remaining int) string {
 // compressHistory replaces the content of old tool_result blocks with a short
 // summary to keep context size manageable. It preserves the most recent
 // keepRecentRounds worth of assistant+tool-result exchanges intact.
-func compressHistory(messages []llm.Message, keepRecentRounds int) []llm.Message {
-	// Count rounds by counting assistant messages.
+func compressHistory(messages []llm.Message, keepRecent int) []llm.Message {
 	var assistantCount int
 	for _, m := range messages {
 		if m.Role == llm.RoleAssistant {
@@ -418,12 +416,13 @@ func compressHistory(messages []llm.Message, keepRecentRounds int) []llm.Message
 		}
 	}
 
-	// Nothing to compress if we haven't exceeded the keep window.
-	if assistantCount <= keepRecentRounds {
+	if assistantCount <= keepRecent {
 		return messages
 	}
 
-	cutoff := assistantCount - keepRecentRounds
+	cutoff := assistantCount - keepRecent
+	// Safe to share ContentBlock slices with the original: messages is
+	// only appended to (never mutated in place) after this returns.
 	out := make([]llm.Message, len(messages))
 	var seen int
 	for i, m := range messages {

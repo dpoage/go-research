@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -187,17 +188,20 @@ func (e *Executor) grep(ctx context.Context, input json.RawMessage) Result {
 		return Result{Output: "pattern is required", IsError: true}
 	}
 
-	args := []string{"-rn", "--color=never"}
-	if in.Include != "" {
-		args = append(args, "--include="+in.Include)
-	}
-	args = append(args, in.Pattern)
-
 	path := "."
 	if in.Path != "" {
 		path = in.Path
 	}
-	args = append(args, path)
+
+	if err := e.sandbox.CheckRead(path); err != nil {
+		return Result{Output: err.Error(), IsError: true}
+	}
+
+	args := []string{"-rn", "--color=never", "--max-count=200"}
+	if in.Include != "" {
+		args = append(args, "--include="+in.Include)
+	}
+	args = append(args, in.Pattern, path)
 
 	if e.commandTimeout > 0 {
 		var cancel context.CancelFunc
@@ -211,16 +215,19 @@ func (e *Executor) grep(ctx context.Context, input json.RawMessage) Result {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-
-	output := stdout.String()
-	if output == "" && err != nil {
-		// grep returns exit 1 for no matches.
-		return Result{Output: "no matches"}
+	if err != nil {
+		// grep exits 1 for no matches, 2+ for real errors.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return Result{Output: "no matches"}
+		}
+		msg := stderr.String()
+		if msg == "" {
+			msg = err.Error()
+		}
+		return Result{Output: "grep error: " + msg, IsError: true}
 	}
-	if stderr.Len() > 0 {
-		return Result{Output: "grep error: " + stderr.String(), IsError: true}
-	}
-	return Result{Output: output}
+	return Result{Output: stdout.String()}
 }
 
 func (e *Executor) runCommand(ctx context.Context, input json.RawMessage) Result {

@@ -21,6 +21,16 @@ const maxToolOutput = 8000
 // the experiment loop aborts (circuit breaker).
 const maxConsecutiveErrors = 3
 
+// maxFreeRounds caps the number of unbilled (read-only) rounds to prevent
+// an infinite loop if the model keeps issuing free tool calls.
+const maxFreeRounds = 50
+
+// freeTools are tools whose rounds do not count toward the budget.
+var freeTools = map[string]bool{
+	tools.ToolReadFile: true,
+	tools.ToolGrep:     true,
+}
+
 // iterOutcome summarizes what happened in the previous iteration,
 // so the model has context for its next attempt.
 type iterOutcome struct {
@@ -328,7 +338,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 				continue
 			}
 
-			if tc.Name != tools.ToolReadFile && tc.Name != tools.ToolGrep {
+			if !freeTools[tc.Name] {
 				readOnly = false
 			}
 
@@ -345,9 +355,10 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			})
 		}
 
-		// Read-only rounds are free; all others consume a billed round.
 		if !readOnly {
 			billed++
+		} else if stats.Rounds-billed > maxFreeRounds {
+			return messages, stats, fmt.Errorf("exceeded %d free read-only rounds", maxFreeRounds)
 		}
 
 		// Inject a budget reminder as a text block in the tool-result

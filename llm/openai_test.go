@@ -572,6 +572,32 @@ func TestConvertToOpenAIMsgs_ToolResults(t *testing.T) {
 	}
 }
 
+func TestConvertToOpenAIMsgs_ToolResultsWithText(t *testing.T) {
+	// A consolidated message with tool_result blocks AND a text block (budget reminder).
+	m := Message{
+		Role: RoleUser,
+		Content: []ContentBlock{
+			{Type: BlockToolResult, ID: "call_1", Content: "file contents"},
+			{Type: BlockToolResult, ID: "call_2", Content: "command output"},
+			{Type: BlockText, Text: "[3 rounds remaining.]"},
+		},
+	}
+	msgs := convertToOpenAIMsgs(m)
+	// Should produce 2 tool messages + 1 user text message.
+	if len(msgs) != 3 {
+		t.Fatalf("got %d messages, want 3", len(msgs))
+	}
+	if msgs[0].Role != "tool" || msgs[0].ToolCallID != "call_1" {
+		t.Errorf("msgs[0] = %+v, want tool with call_1", msgs[0])
+	}
+	if msgs[1].Role != "tool" || msgs[1].ToolCallID != "call_2" {
+		t.Errorf("msgs[1] = %+v, want tool with call_2", msgs[1])
+	}
+	if msgs[2].Role != "user" || msgs[2].Content != "[3 rounds remaining.]" {
+		t.Errorf("msgs[2] = %+v, want user text with budget message", msgs[2])
+	}
+}
+
 func TestMapOpenAIStopReason(t *testing.T) {
 	tests := []struct {
 		input string

@@ -252,6 +252,11 @@ func convertToOpenAIMsgs(m Message) []openaiMsg {
 	} else if len(toolResults) > 0 {
 		// Tool result messages (role "user" in our generic format, role "tool" in OpenAI).
 		msgs = append(msgs, toolResults...)
+		// If the same message also had text blocks (e.g. budget reminders),
+		// emit them as a separate user message.
+		if textParts != "" {
+			msgs = append(msgs, openaiMsg{Role: "user", Content: textParts})
+		}
 	} else {
 		// Plain user message.
 		msgs = append(msgs, openaiMsg{

@@ -43,6 +43,11 @@ func (VerboseObserver) IterationError(iter int, err error) {
 	fmt.Printf("Error in iteration %d: %v\n", iter, err)
 }
 
+func (VerboseObserver) ToolLoopComplete(_ int, stats ToolLoopStats) {
+	fmt.Printf("Tool loop: %d rounds, %d input tokens, %d output tokens\n",
+		stats.Rounds, stats.InputTokens, stats.OutputTokens)
+}
+
 func (VerboseObserver) Warning(msg string) {
 	fmt.Printf("Warning: %s\n", msg)
 }

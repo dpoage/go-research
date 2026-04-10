@@ -13,13 +13,15 @@ import (
 
 // StatusLineObserver renders experiment progress as a single updating terminal line.
 type StatusLineObserver struct {
-	kept    []float64
-	best    float64
-	nKeep   int
-	nDisc   int
-	nErr    int
-	phase   string
-	lastLen int
+	kept            []float64
+	best            float64
+	nKeep           int
+	nDisc           int
+	nErr            int
+	phase           string
+	lastLen         int
+	lastRounds      int
+	lastInputTokens int
 }
 
 // NewStatusLineObserver creates a StatusLineObserver.
@@ -63,6 +65,11 @@ func (o *StatusLineObserver) NoImprovement(_ int, _ float64, _ float64) {
 func (o *StatusLineObserver) IterationError(_ int, _ error) {
 	o.nErr++
 	o.render("error")
+}
+
+func (o *StatusLineObserver) ToolLoopComplete(_ int, stats ToolLoopStats) {
+	o.lastRounds = stats.Rounds
+	o.lastInputTokens = stats.InputTokens
 }
 
 func (o *StatusLineObserver) Warning(_ string) {}

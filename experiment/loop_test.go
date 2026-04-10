@@ -1164,7 +1164,10 @@ func TestLoop_ToolLoop_ContextCancelledBetweenRounds(t *testing.T) {
 }
 
 func TestToolDefs(t *testing.T) {
-	defs := ToolDefs()
+	cfg := &config.Config{
+		Files: []string{"model.py", "train.py"},
+	}
+	defs := ToolDefs(cfg)
 	if len(defs) != 4 {
 		t.Fatalf("expected 4 tool defs, got %d", len(defs))
 	}
@@ -1591,5 +1594,224 @@ func TestLoop_CircuitBreaker_ResetsOnSuccess(t *testing.T) {
 	err = loop.Run(context.Background(), 5)
 	if err != nil {
 		t.Fatalf("expected no circuit breaker error, got: %v", err)
+	}
+}
+
+func TestCompressHistory_NoCompression(t *testing.T) {
+	// With fewer assistant messages than keepRecent, no compression happens.
+	messages := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "prompt"),
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "thinking"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c1", Content: strings.Repeat("x", 500)}}},
+	}
+	result := compressHistory(messages, 3)
+	// Content should be unchanged since assistantCount (1) <= keepRecent (3).
+	if result[2].Content[0].Content != messages[2].Content[0].Content {
+		t.Error("expected no compression when assistant count <= keepRecent")
+	}
+}
+
+func TestCompressHistory_CompressesOldRounds(t *testing.T) {
+	messages := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "prompt"),
+		// Round 1 (old — should be compressed)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r1"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c1", Content: strings.Repeat("x", 500)}}},
+		// Round 2 (old — should be compressed)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r2"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c2", Content: strings.Repeat("y", 500)}}},
+		// Round 3 (recent — keep)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r3"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c3", Content: strings.Repeat("z", 500)}}},
+		// Round 4 (recent — keep)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r4"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c4", Content: strings.Repeat("w", 500)}}},
+	}
+
+	result := compressHistory(messages, 2)
+
+	// Rounds 1 and 2 (indices 2 and 4) should have truncated tool_result content.
+	for _, idx := range []int{2, 4} {
+		content := result[idx].Content[0].Content
+		if len(content) > 200 {
+			t.Errorf("message[%d] content not compressed: len=%d", idx, len(content))
+		}
+		if !strings.Contains(content, "truncated from history") {
+			t.Errorf("message[%d] missing truncation marker: %s", idx, content)
+		}
+	}
+
+	// Rounds 3 and 4 (indices 6 and 8) should be intact.
+	for _, idx := range []int{6, 8} {
+		content := result[idx].Content[0].Content
+		if strings.Contains(content, "truncated") {
+			t.Errorf("message[%d] should NOT be compressed: %s", idx, content)
+		}
+	}
+
+	// Assistant text blocks should never be compressed.
+	for _, idx := range []int{1, 3, 5, 7} {
+		if result[idx].Content[0].Text != messages[idx].Content[0].Text {
+			t.Errorf("message[%d] assistant text was modified", idx)
+		}
+	}
+}
+
+func TestCompressHistory_PreservesShortContent(t *testing.T) {
+	messages := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "prompt"),
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r1"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c1", Content: "short"}}},
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r2"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.BlockToolResult, ID: "c2", Content: "also short"}}},
+	}
+
+	result := compressHistory(messages, 1)
+
+	// The old round's content is under 200 chars, so it should be preserved.
+	if result[2].Content[0].Content != "short" {
+		t.Errorf("short content should not be compressed: %s", result[2].Content[0].Content)
+	}
+}
+
+func TestToolDefs_WritableFilesInDescription(t *testing.T) {
+	cfg := &config.Config{
+		Files: []string{"model.py", "train.py"},
+	}
+	defs := ToolDefs(cfg)
+
+	var writeDesc string
+	for _, d := range defs {
+		if d.Name == "write_file" {
+			writeDesc = d.Description
+		}
+	}
+	if !strings.Contains(writeDesc, "model.py") || !strings.Contains(writeDesc, "train.py") {
+		t.Errorf("write_file description should contain writable files, got: %s", writeDesc)
+	}
+}
+
+func TestBudgetMessage(t *testing.T) {
+	tests := []struct {
+		remaining int
+		contains  string
+	}{
+		{1, "FINAL ROUND"},
+		{2, "URGENT"},
+		{5, "5 rounds remaining"},
+	}
+	for _, tt := range tests {
+		msg := budgetMessage(tt.remaining)
+		if !strings.Contains(msg, tt.contains) {
+			t.Errorf("budgetMessage(%d) = %q, want to contain %q", tt.remaining, msg, tt.contains)
+		}
+	}
+}
+
+func TestPrefillFileContents(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create two small files.
+	f1 := filepath.Join(dir, "a.txt")
+	f2 := filepath.Join(dir, "b.txt")
+	os.WriteFile(f1, []byte("hello"), 0644)
+	os.WriteFile(f2, []byte("world"), 0644)
+
+	cfg := &config.Config{
+		Files: []string{f1, f2},
+	}
+	loop := &Loop{config: cfg}
+
+	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "iteration prompt")}
+	result := loop.prefillFileContents(messages)
+
+	// Should have 3 messages: original user prompt + synthetic assistant + synthetic user.
+	if len(result) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(result))
+	}
+	if result[1].Role != llm.RoleAssistant {
+		t.Errorf("messages[1] role = %q, want assistant", result[1].Role)
+	}
+	if result[2].Role != llm.RoleUser {
+		t.Errorf("messages[2] role = %q, want user", result[2].Role)
+	}
+
+	// Verify file contents are present.
+	var allText string
+	for _, b := range result[2].Content {
+		allText += b.Text
+	}
+	if !strings.Contains(allText, "hello") || !strings.Contains(allText, "world") {
+		t.Errorf("prefill should contain file contents, got: %s", allText)
+	}
+	if !strings.Contains(allText, "a.txt") || !strings.Contains(allText, "b.txt") {
+		t.Errorf("prefill should contain file names, got: %s", allText)
+	}
+}
+
+func TestPrefillFileContents_ExceedsLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create one small file and one large file that exceeds the budget.
+	small := filepath.Join(dir, "small.txt")
+	large := filepath.Join(dir, "large.txt")
+	os.WriteFile(small, []byte("tiny"), 0644)
+	os.WriteFile(large, make([]byte, maxPrefillBytes+1), 0644)
+
+	cfg := &config.Config{
+		Files: []string{small, large},
+	}
+	loop := &Loop{config: cfg}
+
+	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "prompt")}
+	result := loop.prefillFileContents(messages)
+
+	// Should include the small file and skip the large one.
+	var allText string
+	for _, b := range result[2].Content {
+		allText += b.Text
+	}
+	if !strings.Contains(allText, "tiny") {
+		t.Errorf("small file should be included: %s", allText)
+	}
+	if !strings.Contains(allText, "not shown") {
+		t.Errorf("large file should be listed as skipped: %s", allText)
+	}
+}
+
+func TestPrefillFileContents_MissingFile(t *testing.T) {
+	cfg := &config.Config{
+		Files: []string{"/nonexistent/file.txt"},
+	}
+	loop := &Loop{config: cfg}
+
+	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "prompt")}
+	result := loop.prefillFileContents(messages)
+
+	// Should still produce the prefill with a "not found" note.
+	if len(result) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(result))
+	}
+	var allText string
+	for _, b := range result[2].Content {
+		allText += b.Text
+	}
+	if !strings.Contains(allText, "not found") {
+		t.Errorf("missing file should be noted: %s", allText)
+	}
+}
+
+func TestPrefillFileContents_NoFiles(t *testing.T) {
+	cfg := &config.Config{
+		Files: []string{},
+	}
+	loop := &Loop{config: cfg}
+
+	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "prompt")}
+	result := loop.prefillFileContents(messages)
+
+	// No files = no prefill added.
+	if len(result) != 1 {
+		t.Errorf("expected 1 message (no prefill), got %d", len(result))
 	}
 }

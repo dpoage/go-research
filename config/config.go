@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultMaxTokens = 16384
-	DefaultMaxRounds = 20
+	DefaultMaxRounds = 8
 )
 
 // Config is the top-level research configuration loaded from research.yaml.

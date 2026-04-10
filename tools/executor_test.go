@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -289,5 +290,57 @@ func TestExecutor_RunCommand_Timeout(t *testing.T) {
 
 	if !result.IsError {
 		t.Error("expected timed-out command to return error")
+	}
+}
+
+func TestExecutor_ReadFile_Offset(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lines.txt")
+	if err := os.WriteFile(target, []byte("line1\nline2\nline3\nline4\nline5"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sb, _ := NewSandbox(dir, nil)
+	exec := NewExecutor(sb, 0)
+
+	input, _ := json.Marshal(readFileInput{Path: target, Offset: 2, Limit: 2})
+	result := exec.Dispatch(context.Background(), ToolReadFile, input)
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "line2") {
+		t.Errorf("expected line2 in output: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "line3") {
+		t.Errorf("expected line3 in output: %s", result.Output)
+	}
+	if strings.Contains(result.Output, "line4") {
+		t.Errorf("should NOT contain line4: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "[lines 2-3 of 5]") {
+		t.Errorf("expected header with line range: %s", result.Output)
+	}
+}
+
+func TestExecutor_ReadFile_OffsetOnly(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lines.txt")
+	if err := os.WriteFile(target, []byte("a\nb\nc\nd"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sb, _ := NewSandbox(dir, nil)
+	exec := NewExecutor(sb, 0)
+
+	// Offset without limit reads from offset to end.
+	input, _ := json.Marshal(readFileInput{Path: target, Offset: 3})
+	result := exec.Dispatch(context.Background(), ToolReadFile, input)
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "c\nd") {
+		t.Errorf("expected lines c and d: %s", result.Output)
 	}
 }

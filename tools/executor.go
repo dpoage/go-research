@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -30,7 +31,9 @@ func NewExecutor(sandbox *Sandbox, cmdTimeout time.Duration) *Executor {
 }
 
 type readFileInput struct {
-	Path string `json:"path"`
+	Path   string `json:"path"`
+	Offset int    `json:"offset,omitempty"` // 1-based start line (optional)
+	Limit  int    `json:"limit,omitempty"`  // max lines to return (optional)
 }
 
 type writeFileInput struct {
@@ -78,6 +81,26 @@ func (e *Executor) readFile(input json.RawMessage) Result {
 	if err != nil {
 		return Result{Output: fmt.Sprintf("read file: %s", err), IsError: true}
 	}
+
+	// If offset or limit is set, return only the requested line range.
+	if in.Offset > 0 || in.Limit > 0 {
+		lines := strings.Split(string(data), "\n")
+		total := len(lines)
+		start := 0
+		if in.Offset > 0 {
+			start = in.Offset - 1 // convert 1-based to 0-based
+		}
+		if start > total {
+			start = total
+		}
+		end := total
+		if in.Limit > 0 && start+in.Limit < total {
+			end = start + in.Limit
+		}
+		header := fmt.Sprintf("[lines %d-%d of %d]\n", start+1, end, total)
+		return Result{Output: header + strings.Join(lines[start:end], "\n")}
+	}
+
 	return Result{Output: string(data)}
 }
 

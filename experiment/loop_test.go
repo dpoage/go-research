@@ -16,7 +16,20 @@ import (
 	"github.com/dpoage/go-research/tools"
 )
 
+// defaultOrientationText is a valid orientation brief returned by the mock
+// provider when it detects an orientation-phase call (read-only tools only).
+const defaultOrientationText = `<orientation>
+<working>Baseline established</working>
+<failing>No failures yet</failing>
+<gap>Need to improve the metric</gap>
+<change>Make one focused change to improve the metric</change>
+<risk>Change might not improve the metric</risk>
+</orientation>`
+
 // mockProvider is a fake LLM that returns pre-scripted responses.
+// It auto-responds to orientation-phase calls (detected by having only
+// read-only tools) with a valid brief, so existing action-phase test
+// responses don't need modification.
 type mockProvider struct {
 	// responses is consumed in order. Each call pops the first element.
 	responses []*llm.Response
@@ -25,7 +38,28 @@ type mockProvider struct {
 	calls int
 }
 
-func (m *mockProvider) Complete(_ context.Context, _ *llm.Request) (*llm.Response, error) {
+// isOrientationCall returns true if the request has exactly the 2 read-only
+// tools used during the orientation phase.
+func isOrientationCall(req *llm.Request) bool {
+	if len(req.Tools) == 2 {
+		names := map[string]bool{}
+		for _, t := range req.Tools {
+			names[t.Name] = true
+		}
+		return names[tools.ToolReadFile] && names[tools.ToolGrep]
+	}
+	return false
+}
+
+func (m *mockProvider) Complete(_ context.Context, req *llm.Request) (*llm.Response, error) {
+	// Auto-respond to orientation calls without consuming scripted responses.
+	if isOrientationCall(req) {
+		return &llm.Response{
+			Content:    []llm.ContentBlock{{Type: llm.BlockText, Text: defaultOrientationText}},
+			StopReason: llm.StopEndTurn,
+		}, nil
+	}
+
 	if m.calls >= len(m.responses) {
 		return &llm.Response{
 			Content:    []llm.ContentBlock{{Type: llm.BlockText, Text: "done"}},
@@ -1063,19 +1097,25 @@ func TestLoop_ToolLoop_TruncatesLongOutput(t *testing.T) {
 	}
 }
 
-// cancelOnFirstCallProvider cancels its context immediately on the first Complete call
-// and returns a tool-use response. This causes toolLoop to dispatch the tool, then hit
-// ctx.Err() != nil at the top of round 1 before the second Complete call.
-type cancelOnFirstCallProvider struct {
+// cancelOnFirstActionCallProvider auto-responds to orientation calls, then
+// cancels the context on the first action-phase call and returns a tool-use
+// response. This causes toolLoop to dispatch the tool, then hit ctx.Err()
+// at the top of the next round.
+type cancelOnFirstActionCallProvider struct {
 	cancel    context.CancelFunc
 	firstResp *llm.Response
 	calls     int
 }
 
-func (p *cancelOnFirstCallProvider) Complete(_ context.Context, _ *llm.Request) (*llm.Response, error) {
+func (p *cancelOnFirstActionCallProvider) Complete(_ context.Context, req *llm.Request) (*llm.Response, error) {
+	if isOrientationCall(req) {
+		return &llm.Response{
+			Content:    []llm.ContentBlock{{Type: llm.BlockText, Text: defaultOrientationText}},
+			StopReason: llm.StopEndTurn,
+		}, nil
+	}
 	p.calls++
 	if p.calls == 1 {
-		// Cancel context immediately, then return a tool-use so toolLoop tries another round.
 		p.cancel()
 		return p.firstResp, nil
 	}
@@ -1140,7 +1180,7 @@ func TestLoop_ToolLoop_ContextCancelledBetweenRounds(t *testing.T) {
 	// First Complete call cancels the context and returns a tool-use response.
 	// After dispatching the tool, toolLoop checks ctx.Err() at the top of round 1
 	// and returns immediately without making a second Complete call.
-	provider := &cancelOnFirstCallProvider{
+	provider := &cancelOnFirstActionCallProvider{
 		cancel: cancel,
 		firstResp: &llm.Response{
 			Content: []llm.ContentBlock{{
@@ -1837,61 +1877,6 @@ func TestFreeRoundNudge(t *testing.T) {
 		if !strings.Contains(msg, tt.contains) {
 			t.Errorf("freeRoundNudge(%d) = %q, want to contain %q", tt.consecutive, msg, tt.contains)
 		}
-	}
-}
-
-func TestAppendFileContents(t *testing.T) {
-	dir := t.TempDir()
-
-	f1 := filepath.Join(dir, "a.txt")
-	f2 := filepath.Join(dir, "b.txt")
-	os.WriteFile(f1, []byte("hello"), 0644)
-	os.WriteFile(f2, []byte("world"), 0644)
-
-	loop := &Loop{config: &config.Config{Files: []string{f1, f2}}}
-
-	var b strings.Builder
-	loop.appendFileContents(&b)
-	output := b.String()
-
-	if !strings.Contains(output, "hello") || !strings.Contains(output, "world") {
-		t.Errorf("should contain file contents, got: %s", output)
-	}
-	if !strings.Contains(output, "a.txt") || !strings.Contains(output, "b.txt") {
-		t.Errorf("should contain file names, got: %s", output)
-	}
-}
-
-func TestAppendFileContents_ExceedsLimit(t *testing.T) {
-	dir := t.TempDir()
-
-	small := filepath.Join(dir, "small.txt")
-	large := filepath.Join(dir, "large.txt")
-	os.WriteFile(small, []byte("tiny"), 0644)
-	os.WriteFile(large, make([]byte, maxPrefillBytes+1), 0644)
-
-	loop := &Loop{config: &config.Config{Files: []string{small, large}}}
-
-	var b strings.Builder
-	loop.appendFileContents(&b)
-	output := b.String()
-
-	if !strings.Contains(output, "tiny") {
-		t.Errorf("small file should be included: %s", output)
-	}
-	if !strings.Contains(output, "use read_file") {
-		t.Errorf("large file should suggest read_file: %s", output)
-	}
-}
-
-func TestAppendFileContents_MissingFile(t *testing.T) {
-	loop := &Loop{config: &config.Config{Files: []string{"/nonexistent/file.txt"}}}
-
-	var b strings.Builder
-	loop.appendFileContents(&b)
-
-	if !strings.Contains(b.String(), "not found") {
-		t.Errorf("missing file should be noted: %s", b.String())
 	}
 }
 

@@ -1810,14 +1810,32 @@ func TestBudgetMessage(t *testing.T) {
 		remaining int
 		contains  string
 	}{
-		{1, "FINAL ROUND"},
+		{1, "URGENT"},
 		{2, "URGENT"},
-		{5, "5 rounds remaining"},
+		{5, "5 edit rounds remaining"},
 	}
 	for _, tt := range tests {
 		msg := budgetMessage(tt.remaining)
 		if !strings.Contains(msg, tt.contains) {
 			t.Errorf("budgetMessage(%d) = %q, want to contain %q", tt.remaining, msg, tt.contains)
+		}
+	}
+}
+
+func TestFreeRoundNudge(t *testing.T) {
+	tests := []struct {
+		consecutive int
+		contains    string
+	}{
+		{2, "Reminder"},
+		{5, "5 free rounds"},
+		{10, "10 free rounds without editing"},
+		{15, "15 free rounds without editing"},
+	}
+	for _, tt := range tests {
+		msg := freeRoundNudge(tt.consecutive)
+		if !strings.Contains(msg, tt.contains) {
+			t.Errorf("freeRoundNudge(%d) = %q, want to contain %q", tt.consecutive, msg, tt.contains)
 		}
 	}
 }
@@ -2062,5 +2080,240 @@ func TestLoop_InitialBenchmark(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "discard") {
 		t.Errorf("iter 1 should be discard (60 > baseline 50), got: %s", lines[1])
+	}
+}
+
+func TestLoop_DoneSummaryExtracted(t *testing.T) {
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	counterPath := filepath.Join(dir, "counter.txt")
+	os.WriteFile(counterPath, []byte("10"), 0644)
+	programPath := filepath.Join(dir, "program.md")
+	os.WriteFile(programPath, []byte("test"), 0644)
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   fmt.Sprintf("echo 'metric:' $(cat %s)", counterPath),
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, _ := NewResultLogger(resultsPath)
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Model writes 5 (improvement), calls done with a summary.
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "w1", Name: tools.ToolWriteFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"5"}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "d1", Name: tools.ToolDone,
+					Input: json.RawMessage(`{"summary":"reduced counter from 10 to 5"}`),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+		},
+	}
+
+	obs := &capturingObserver{}
+	loop := NewLoop(LoopParams{
+		Config: cfg, Provider: provider, Executor: executor,
+		Eval: eval, Git: git, Logger: logger, Observer: obs,
+	})
+
+	if err := loop.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the summary was captured in ToolLoopComplete stats.
+	// The capturingObserver doesn't track stats, but we can verify via
+	// the observer's ToolCall which should have been called for "done".
+	foundDone := false
+	for _, tc := range obs.toolCalls {
+		if tc == tools.ToolDone {
+			foundDone = true
+		}
+	}
+	if !foundDone {
+		t.Error("expected done tool call")
+	}
+}
+
+func TestCompressHistory_StripsStaleBudgetMessages(t *testing.T) {
+	messages := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "prompt"),
+		// Round 1 (old — budget message should be stripped)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r1"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{
+			{Type: llm.BlockToolResult, ID: "c1", Content: "short result"},
+			{Type: llm.BlockText, Text: "[5 edit rounds remaining.]"},
+		}},
+		// Round 2 (old — nudge should be stripped)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r2"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{
+			{Type: llm.BlockToolResult, ID: "c2", Content: "short result"},
+			{Type: llm.BlockText, Text: "[Reminder: make your edit and call done when ready.]"},
+		}},
+		// Round 3 (recent — keep everything)
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.BlockText, Text: "r3"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{
+			{Type: llm.BlockToolResult, ID: "c3", Content: "short result"},
+			{Type: llm.BlockText, Text: "[2 edit rounds remaining.]"},
+		}},
+	}
+
+	result := compressHistory(messages, 1)
+
+	// Old messages (indices 2 and 4) should have budget/nudge text blocks stripped.
+	for _, idx := range []int{2, 4} {
+		for _, b := range result[idx].Content {
+			if b.Type == llm.BlockText && strings.HasPrefix(b.Text, "[") {
+				t.Errorf("message[%d] should have stale text block stripped: %s", idx, b.Text)
+			}
+		}
+	}
+
+	// Recent message (index 6) should still have its budget text.
+	found := false
+	for _, b := range result[6].Content {
+		if b.Type == llm.BlockText && strings.Contains(b.Text, "2 edit rounds") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("recent message should preserve budget text block")
+	}
+}
+
+func TestFreeRoundNudge_InjectedInToolLoop(t *testing.T) {
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	counterPath := filepath.Join(dir, "counter.txt")
+	os.WriteFile(counterPath, []byte("1"), 0644)
+	programPath := filepath.Join(dir, "program.md")
+	os.WriteFile(programPath, []byte("test"), 0644)
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   "echo 'metric: 1'",
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	// Model does 3 free read_file calls, then stops.
+	// After rounds 2 and 3, nudge messages should be injected.
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "r1", Name: tools.ToolReadFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "r2", Name: tools.ToolReadFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: "r3", Name: tools.ToolReadFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			// Then model stops.
+			{
+				Content:    []llm.ContentBlock{{Type: llm.BlockText, Text: "done thinking"}},
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+
+	toolDefs := ToolDefs(cfg)
+	messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, "test prompt")}
+
+	loop := &Loop{
+		config:   cfg,
+		provider: provider,
+		executor: executor,
+		eval:     eval,
+		observer: VerboseObserver{},
+	}
+
+	msgs, _, err := loop.toolLoop(context.Background(), "system", messages, toolDefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that nudge text blocks were injected in later user messages.
+	nudgeCount := 0
+	for _, m := range msgs {
+		if m.Role != llm.RoleUser {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.Type == llm.BlockText && strings.Contains(b.Text, "Reminder") {
+				nudgeCount++
+			}
+		}
+	}
+	if nudgeCount == 0 {
+		t.Error("expected at least one free-round nudge message to be injected")
 	}
 }

@@ -13,8 +13,9 @@ import (
 
 // StatusLineObserver renders experiment progress as a single updating terminal line.
 type StatusLineObserver struct {
-	kept    []float64
+	all     []float64
 	best    float64
+	iter    int
 	nKeep   int
 	nDisc   int
 	nErr    int
@@ -28,6 +29,7 @@ func NewStatusLineObserver() *StatusLineObserver {
 }
 
 func (o *StatusLineObserver) IterationStart(iter, maxIter int) {
+	o.iter = iter
 	if maxIter > 0 {
 		o.phase = fmt.Sprintf("iter %d/%d", iter, maxIter)
 	} else {
@@ -50,12 +52,13 @@ func (o *StatusLineObserver) EvalResult(_ int, _ float64, _ time.Duration) {}
 
 func (o *StatusLineObserver) Improvement(_ int, metric, _ float64) {
 	o.best = metric
-	o.kept = append(o.kept, metric)
+	o.all = append(o.all, metric)
 	o.nKeep++
 	o.render("kept")
 }
 
-func (o *StatusLineObserver) NoImprovement(_ int, _ float64, _ float64) {
+func (o *StatusLineObserver) NoImprovement(_ int, metric float64, _ float64) {
+	o.all = append(o.all, metric)
 	o.nDisc++
 	o.render("reverted")
 }
@@ -74,7 +77,7 @@ func (o *StatusLineObserver) Complete(bestMetric float64) {
 	if math.IsNaN(bestMetric) {
 		fmt.Fprintf(os.Stderr, "Done. No successful iterations.\n")
 	} else {
-		spark := display.Sparkline(o.kept)
+		spark := display.Sparkline(o.all)
 		fmt.Fprintf(os.Stderr, "Done. best: %.6f %s (%d kept, %d discarded, %d errors)\n",
 			bestMetric, spark, o.nKeep, o.nDisc, o.nErr)
 	}
@@ -89,7 +92,7 @@ func (o *StatusLineObserver) render(activity string) {
 		fmt.Fprintf(&b, " │ best: %.6f", o.best)
 	}
 
-	if spark := display.Sparkline(o.kept); spark != "" {
+	if spark := display.Sparkline(o.all); spark != "" {
 		fmt.Fprintf(&b, " %s", spark)
 	}
 

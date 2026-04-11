@@ -4,9 +4,10 @@ import "time"
 
 // ToolLoopStats captures per-iteration metrics from the tool loop.
 type ToolLoopStats struct {
-	Rounds       int // Number of LLM completion rounds used.
-	InputTokens  int // Total input tokens across all rounds.
-	OutputTokens int // Total output tokens across all rounds.
+	Rounds       int    // Number of LLM completion rounds used.
+	InputTokens  int    // Total input tokens across all rounds.
+	OutputTokens int    // Total output tokens across all rounds.
+	Summary      string // Summary from the done tool call, if any.
 }
 
 // Observer receives lifecycle events from the experiment loop.

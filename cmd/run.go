@@ -50,9 +50,21 @@ func buildRunDeps(gf globalFlags, maxIter int, resultFile string, verbose bool) 
 		return nil, err
 	}
 
-	provider, err := llm.NewProvider(cfg.Provider)
+	var provider llm.Provider
+	provider, err = llm.NewProvider(cfg.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
+	}
+
+	if cfg.Debug.Enabled {
+		lp, lpErr := llm.NewLoggingProvider(provider, cfg.Debug.Dir)
+		if lpErr != nil {
+			return nil, fmt.Errorf("create debug logger: %w", lpErr)
+		}
+		provider = lp
+		if !gf.quiet {
+			fmt.Printf("Debug log: %s\n", lp.Path())
+		}
 	}
 
 	sandbox, err := tools.NewSandbox(".", cfg.Files)

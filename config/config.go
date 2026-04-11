@@ -22,6 +22,13 @@ type Config struct {
 	Eval     EvalConfig     `yaml:"eval"`
 	Provider ProviderConfig `yaml:"provider"`
 	Git      GitConfig      `yaml:"git"`
+	Debug    DebugConfig    `yaml:"debug"`
+}
+
+// DebugConfig controls diagnostic logging for prompt analysis.
+type DebugConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Dir     string `yaml:"dir"`
 }
 
 // EvalConfig defines how experiments are evaluated.
@@ -82,6 +89,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Git.BranchPrefix == "" {
 		c.Git.BranchPrefix = "research/"
+	}
+	if c.Debug.Enabled && c.Debug.Dir == "" {
+		c.Debug.Dir = "/tmp/go-research-debug"
 	}
 	if c.Eval.Source.Kind == "" {
 		c.Eval.Source = NewSourceStdout()

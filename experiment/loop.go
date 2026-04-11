@@ -23,9 +23,11 @@ const maxConsecutiveErrors = 3
 
 // maxFreeRounds caps the number of unbilled (read-only) rounds to prevent
 // an infinite loop if the model keeps issuing free tool calls.
-const maxFreeRounds = 50
+const maxFreeRounds = 20
 
 // freeTools are tools whose rounds do not count toward the budget.
+// Note: run_eval is handled before this map is checked (see toolLoop),
+// so it does not need an entry here.
 var freeTools = map[string]bool{
 	tools.ToolReadFile: true,
 	tools.ToolGrep:     true,
@@ -34,8 +36,9 @@ var freeTools = map[string]bool{
 // iterOutcome summarizes what happened in the previous iteration,
 // so the model has context for its next attempt.
 type iterOutcome struct {
-	Metric float64
-	Status Status
+	Metric  float64
+	Status  Status
+	Summary string
 }
 
 // LoopParams holds the dependencies for an experiment Loop.
@@ -81,7 +84,7 @@ func ToolDefs(cfg *config.Config) []llm.ToolDef {
 	return []llm.ToolDef{
 		{
 			Name:        tools.ToolReadFile,
-			Description: "Read file contents. All paths are readable. Prefer targeted reads over large files.",
+			Description: "Read file contents. Editable files are inlined in your prompt — use this only for other files or files too large to inline. Free (does not consume a round).",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to read"},"offset":{"type":"integer","description":"Start reading from this line number (1-based, optional)"},"limit":{"type":"integer","description":"Maximum number of lines to return (optional)"}},"required":["path"]}`),
 		},
 		{
@@ -105,9 +108,14 @@ func ToolDefs(cfg *config.Config) []llm.ToolDef {
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"}},"required":["command"]}`),
 		},
 		{
+			Name:        tools.ToolRunEval,
+			Description: "Run the eval command and return the current metric. Free (does not consume a round). The harness runs eval automatically after done — you rarely need this.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		{
 			Name:        tools.ToolDone,
-			Description: "Signal completion and trigger eval. You MUST call this when finished. The harness reverts if the metric doesn't improve, so always call done — don't overthink it.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string","description":"Brief description of the change you made"}},"required":["summary"]}`),
+			Description: "Signal that you are finished editing. You MUST call this after making your change. Provide a summary of what you changed — this is preserved across iterations to avoid repeating failed approaches.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string","description":"Brief description of what you changed and why"}},"required":["summary"]}`),
 		},
 	}
 }
@@ -125,6 +133,16 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 	toolDefs := ToolDefs(l.config)
 	consecutiveErrors := 0
 	var lastResult *iterOutcome
+
+	// Run initial benchmark so the model has a baseline.
+	l.observer.EvalStarted()
+	baseline := l.eval.Run(ctx)
+	if baseline.Error != nil {
+		l.observer.Warning(fmt.Sprintf("initial benchmark failed: %v", baseline.Error))
+	} else {
+		bestMetric = baseline.Metric
+		l.observer.EvalResult(0, baseline.Metric, baseline.Elapsed)
+	}
 
 	for iter := 1; maxIter <= 0 || iter <= maxIter; iter++ {
 		if ctx.Err() != nil {
@@ -175,7 +193,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 			// Log before commit so the results file is included in the snapshot.
 			l.logResult(iter, result, StatusKeep, "", stats)
-			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusKeep}
+			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusKeep, Summary: stats.Summary}
 
 			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.logger.Path()); err != nil {
 				l.observer.Warning(fmt.Sprintf("git commit failed: %v", err))
@@ -185,7 +203,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 			l.revert(iter)
 			// Log after revert so the entry isn't reverted with the code changes.
 			l.logResult(iter, result, StatusDiscard, fmt.Sprintf("best=%.6f", bestMetric), stats)
-			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusDiscard}
+			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusDiscard, Summary: stats.Summary}
 		}
 	}
 
@@ -203,6 +221,9 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 
 	if !math.IsNaN(bestMetric) {
 		fmt.Fprintf(&b, "**Best metric:** %.6f", bestMetric)
+		if last == nil {
+			b.WriteString(" (baseline)")
+		}
 	}
 
 	if last != nil {
@@ -210,20 +231,33 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 		case StatusKeep:
 			fmt.Fprintf(&b, "  |  **Last:** kept (%.6f) — try a different improvement", last.Metric)
 		case StatusDiscard:
-			fmt.Fprintf(&b, "  |  **Last:** discarded (%.6f) — try something else", last.Metric)
+			fmt.Fprintf(&b, "  |  **Last:** discarded (%.6f)", last.Metric)
+			if last.Summary != "" {
+				fmt.Fprintf(&b, " — tried: %s. Try a DIFFERENT approach", last.Summary)
+			} else {
+				b.WriteString(" — try something else")
+			}
 		case StatusError:
 			b.WriteString("  |  **Last:** error — try a different approach")
 		}
 	}
 	b.WriteString("\n")
 
-	// Protocol — terse instructions the model can scan quickly.
+	// Protocol — explicit workflow with guardrails.
 	fmt.Fprintf(&b, `
 ### Protocol
-1. Make ONE focused change
-2. Call done with a summary
+1. Review the file contents below (already inlined — do NOT re-read them)
+2. Decide on ONE focused change to improve the metric
+3. Edit the file(s) using edit_file or write_file
+4. Call done with a summary of what you changed
 
-Budget: %d tool rounds (read_file calls are free). The harness reverts if the metric doesn't improve, so always call done — don't overthink it.
+Do NOT:
+- Re-read files that are already inlined below
+- Run run_eval or read files after editing — the harness evaluates automatically
+- Make multiple unrelated changes in one iteration
+
+Budget: %d edit rounds (read_file and grep are free but do not stall on them).
+The harness reverts if the metric doesn't improve, so always call done.
 `, l.config.Provider.MaxRounds)
 
 	// Inline current file contents so the agent can act immediately.
@@ -248,7 +282,7 @@ const keepRecentRounds = 3
 // exhausted; oversized files are listed by name and size.
 func (l *Loop) appendFileContents(b *strings.Builder) {
 	budget := maxPrefillBytes
-	b.WriteString("\n### Current file contents\n")
+	b.WriteString("\n### Current file contents (already loaded — do not re-read these)\n")
 
 	var anyWritten bool
 	for _, path := range l.config.Files {
@@ -282,6 +316,7 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 	maxRounds := l.config.Provider.MaxRounds
 	var stats ToolLoopStats
 	billed := 0
+	consecutiveFree := 0
 
 	for {
 		if ctx.Err() != nil {
@@ -331,9 +366,29 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 			if tc.Name == tools.ToolDone {
 				done = true
 				readOnly = false
+				var di struct {
+					Summary string `json:"summary"`
+				}
+				_ = json.Unmarshal(tc.Input, &di)
+				stats.Summary = di.Summary
 				l.observer.ToolCall(tc.Name, "iteration complete")
 				resultBlocks = append(resultBlocks, llm.ContentBlock{
 					Type: llm.BlockToolResult, ID: tc.ID, Content: "Evaluation will now run.",
+				})
+				continue
+			}
+
+			if tc.Name == tools.ToolRunEval {
+				evalResult := l.eval.Run(ctx)
+				var output string
+				if evalResult.Error != nil {
+					output = fmt.Sprintf("eval error: %v", evalResult.Error)
+				} else {
+					output = fmt.Sprintf("current metric: %.6f", evalResult.Metric)
+				}
+				l.observer.ToolCall(tc.Name, output)
+				resultBlocks = append(resultBlocks, llm.ContentBlock{
+					Type: llm.BlockToolResult, ID: tc.ID, Content: output, IsError: evalResult.Error != nil,
 				})
 				continue
 			}
@@ -357,16 +412,22 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 
 		if !readOnly {
 			billed++
-		} else if stats.Rounds-billed > maxFreeRounds {
-			return messages, stats, fmt.Errorf("exceeded %d free read-only rounds", maxFreeRounds)
+			consecutiveFree = 0
+		} else {
+			consecutiveFree++
+			if stats.Rounds-billed > maxFreeRounds {
+				return messages, stats, fmt.Errorf("exceeded %d free read-only rounds", maxFreeRounds)
+			}
 		}
 
-		// Inject a budget reminder as a text block in the tool-result
-		// message. Keeping the system prompt stable enables provider-side
-		// prompt caching.
+		// Inject feedback as a text block in the tool-result message.
 		if billed > 0 {
 			resultBlocks = append(resultBlocks, llm.ContentBlock{
 				Type: llm.BlockText, Text: budgetMessage(maxRounds - billed),
+			})
+		} else if consecutiveFree >= 2 {
+			resultBlocks = append(resultBlocks, llm.ContentBlock{
+				Type: llm.BlockText, Text: freeRoundNudge(consecutiveFree),
 			})
 		}
 
@@ -393,14 +454,26 @@ func (l *Loop) checkCircuitBreaker(consecutiveErrors *int, err error) error {
 }
 
 // budgetMessage returns an escalating urgency reminder based on remaining rounds.
+// Messages start with "[" so compressHistory can strip stale ones from old messages.
 func budgetMessage(remaining int) string {
 	switch {
-	case remaining <= 1:
-		return "[FINAL ROUND — tools disabled. Summarize what you changed and stop.]"
 	case remaining <= 2:
-		return fmt.Sprintf("[URGENT: %d rounds left. Call done NOW.]", remaining)
+		return "[URGENT: last edit round after this. Call done NOW.]"
 	default:
-		return fmt.Sprintf("[%d rounds remaining.]", remaining)
+		return fmt.Sprintf("[%d edit rounds remaining.]", remaining)
+	}
+}
+
+// freeRoundNudge returns an escalating reminder when the model is only using free tools.
+// Messages start with "[" so compressHistory can strip stale ones from old messages.
+func freeRoundNudge(consecutive int) string {
+	switch {
+	case consecutive >= 10:
+		return fmt.Sprintf("[You have used %d free rounds without editing. Make your change and call done NOW.]", consecutive)
+	case consecutive >= 5:
+		return fmt.Sprintf("[%d free rounds without editing. Make your change and call done.]", consecutive)
+	default:
+		return "[Reminder: make your edit and call done when ready.]"
 	}
 }
 
@@ -428,19 +501,24 @@ func compressHistory(messages []llm.Message, keepRecent int) []llm.Message {
 		if m.Role == llm.RoleAssistant {
 			seen++
 		}
-		// Compress tool_result blocks in messages that precede the cutoff.
+		// Compress tool_result blocks and strip stale injected text in messages
+		// that precede the cutoff.
 		if seen <= cutoff && m.Role == llm.RoleUser {
-			compressed := make([]llm.ContentBlock, len(m.Content))
-			for j, b := range m.Content {
+			compressed := make([]llm.ContentBlock, 0, len(m.Content))
+			for _, b := range m.Content {
+				// Drop stale budget/nudge text blocks from old messages.
+				if b.Type == llm.BlockText && strings.HasPrefix(b.Text, "[") {
+					continue
+				}
 				if b.Type == llm.BlockToolResult && len(b.Content) > 200 {
-					compressed[j] = llm.ContentBlock{
+					compressed = append(compressed, llm.ContentBlock{
 						Type:    llm.BlockToolResult,
 						ID:      b.ID,
 						Content: fmt.Sprintf("[%d bytes, truncated from history]", len(b.Content)),
 						IsError: b.IsError,
-					}
+					})
 				} else {
-					compressed[j] = b
+					compressed = append(compressed, b)
 				}
 			}
 			out[i] = llm.Message{Role: m.Role, Content: compressed}

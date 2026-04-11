@@ -29,6 +29,7 @@ const maxFreeRounds = 50
 var freeTools = map[string]bool{
 	tools.ToolReadFile: true,
 	tools.ToolGrep:     true,
+	tools.ToolRunEval:  true,
 }
 
 // iterOutcome summarizes what happened in the previous iteration,
@@ -105,6 +106,11 @@ func ToolDefs(cfg *config.Config) []llm.ToolDef {
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"}},"required":["command"]}`),
 		},
 		{
+			Name:        tools.ToolRunEval,
+			Description: "Run the eval command and return the current metric. Use this to check your progress before calling done. Free (does not consume a round).",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		{
 			Name:        tools.ToolDone,
 			Description: "Signal completion and trigger eval. You MUST call this when finished. The harness reverts if the metric doesn't improve, so always call done — don't overthink it.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string","description":"Brief description of the change you made"}},"required":["summary"]}`),
@@ -125,6 +131,16 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 	toolDefs := ToolDefs(l.config)
 	consecutiveErrors := 0
 	var lastResult *iterOutcome
+
+	// Run initial benchmark so the model has a baseline.
+	l.observer.EvalStarted()
+	baseline := l.eval.Run(ctx)
+	if baseline.Error != nil {
+		l.observer.Warning(fmt.Sprintf("initial benchmark failed: %v", baseline.Error))
+	} else {
+		bestMetric = baseline.Metric
+		l.observer.EvalResult(0, baseline.Metric, baseline.Elapsed)
+	}
 
 	for iter := 1; maxIter <= 0 || iter <= maxIter; iter++ {
 		if ctx.Err() != nil {
@@ -203,6 +219,9 @@ func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) stri
 
 	if !math.IsNaN(bestMetric) {
 		fmt.Fprintf(&b, "**Best metric:** %.6f", bestMetric)
+		if last == nil {
+			b.WriteString(" (baseline)")
+		}
 	}
 
 	if last != nil {
@@ -334,6 +353,21 @@ func (l *Loop) toolLoop(ctx context.Context, system string, messages []llm.Messa
 				l.observer.ToolCall(tc.Name, "iteration complete")
 				resultBlocks = append(resultBlocks, llm.ContentBlock{
 					Type: llm.BlockToolResult, ID: tc.ID, Content: "Evaluation will now run.",
+				})
+				continue
+			}
+
+			if tc.Name == tools.ToolRunEval {
+				evalResult := l.eval.Run(ctx)
+				var output string
+				if evalResult.Error != nil {
+					output = fmt.Sprintf("eval error: %v", evalResult.Error)
+				} else {
+					output = fmt.Sprintf("current metric: %.6f", evalResult.Metric)
+				}
+				l.observer.ToolCall(tc.Name, output)
+				resultBlocks = append(resultBlocks, llm.ContentBlock{
+					Type: llm.BlockToolResult, ID: tc.ID, Content: output, IsError: evalResult.Error != nil,
 				})
 				continue
 			}

@@ -35,11 +35,14 @@ func TestStatusLineObserver_TracksCounts(t *testing.T) {
 	if o.nErr != 1 {
 		t.Errorf("nErr = %d, want 1", o.nErr)
 	}
-	if len(o.kept) != 1 || o.kept[0] != 0.5 {
-		t.Errorf("kept = %v, want [0.5]", o.kept)
+	if len(o.all) != 2 || o.all[0] != 0.5 || o.all[1] != 0.6 {
+		t.Errorf("all = %v, want [0.5 0.6] (keep + discard)", o.all)
 	}
 	if o.best != 0.5 {
 		t.Errorf("best = %f, want 0.5", o.best)
+	}
+	if o.iter != 3 {
+		t.Errorf("iter = %d, want 3", o.iter)
 	}
 }
 

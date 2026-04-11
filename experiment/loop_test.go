@@ -262,14 +262,20 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	}
 }
 
-// capturingObserver records Warning calls for assertion.
+// capturingObserver records Warning and ToolCall events for assertion.
 type capturingObserver struct {
 	VerboseObserver
-	warnings []string
+	warnings  []string
+	toolCalls []string
 }
 
 func (o *capturingObserver) Warning(msg string) {
 	o.warnings = append(o.warnings, msg)
+}
+
+func (o *capturingObserver) ToolCall(name, output string) {
+	o.toolCalls = append(o.toolCalls, name)
+	o.VerboseObserver.ToolCall(name, output)
 }
 
 func TestLoop_Run_ProgramReadError(t *testing.T) {
@@ -1168,8 +1174,8 @@ func TestToolDefs(t *testing.T) {
 		Files: []string{"model.py", "train.py"},
 	}
 	defs := ToolDefs(cfg)
-	if len(defs) != 6 {
-		t.Fatalf("expected 6 tool defs, got %d", len(defs))
+	if len(defs) != 7 {
+		t.Fatalf("expected 7 tool defs, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -1182,7 +1188,7 @@ func TestToolDefs(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolGrep, tools.ToolRunCommand, tools.ToolDone} {
+	for _, expected := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolGrep, tools.ToolRunCommand, tools.ToolRunEval, tools.ToolDone} {
 		if !names[expected] {
 			t.Errorf("missing tool def: %s", expected)
 		}
@@ -1868,5 +1874,193 @@ func TestAppendFileContents_MissingFile(t *testing.T) {
 
 	if !strings.Contains(b.String(), "not found") {
 		t.Errorf("missing file should be noted: %s", b.String())
+	}
+}
+
+func TestLoop_RunEvalTool(t *testing.T) {
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	counterPath := filepath.Join(dir, "counter.txt")
+	os.WriteFile(counterPath, []byte("42"), 0644)
+
+	programPath := filepath.Join(dir, "program.md")
+	os.WriteFile(programPath, []byte("test"), 0644)
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   fmt.Sprintf("echo 'metric:' $(cat %s)", counterPath),
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, _ := NewResultLogger(resultsPath)
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Model calls run_eval, then writes a lower value, then calls done.
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "eval_1",
+					Name:  tools.ToolRunEval,
+					Input: json.RawMessage(`{}`),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "write_1",
+					Name:  tools.ToolWriteFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"10"}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "done_1",
+					Name:  tools.ToolDone,
+					Input: json.RawMessage(`{"summary":"lowered counter"}`),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+		},
+	}
+
+	obs := &capturingObserver{}
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: obs,
+	})
+
+	if err := loop.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify run_eval was called (captured in observer tool calls).
+	foundEvalCall := false
+	for _, tc := range obs.toolCalls {
+		if tc == tools.ToolRunEval {
+			foundEvalCall = true
+		}
+	}
+	if !foundEvalCall {
+		t.Error("expected run_eval tool call to be captured by observer")
+	}
+}
+
+func TestLoop_InitialBenchmark(t *testing.T) {
+	dir := initTestRepo(t)
+	chdir(t, dir)
+
+	counterPath := filepath.Join(dir, "counter.txt")
+	os.WriteFile(counterPath, []byte("50"), 0644)
+
+	programPath := filepath.Join(dir, "program.md")
+	os.WriteFile(programPath, []byte("test"), 0644)
+
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixtures"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %s", args, err, out)
+		}
+	}
+
+	cfg := &config.Config{
+		Program: programPath,
+		Files:   []string{"counter.txt"},
+		Eval: config.EvalConfig{
+			Command:   fmt.Sprintf("echo 'metric:' $(cat %s)", counterPath),
+			Metric:    `metric:\s+(\d+)`,
+			Source:    config.NewSourceStdout(),
+			Direction: config.DirectionMinimize,
+			Timeout:   config.Duration{Duration: 5 * time.Second},
+		},
+		Provider: config.ProviderConfig{MaxTokens: 1024, MaxRounds: 20},
+		Git:      config.GitConfig{Enabled: false},
+	}
+
+	resultsPath := filepath.Join(dir, "results.tsv")
+	logger, _ := NewResultLogger(resultsPath)
+	sandbox, _ := tools.NewSandbox(dir, cfg.Files)
+	executor := tools.NewExecutor(sandbox, 5*time.Second)
+	eval, _ := NewEval(cfg.Eval)
+	git := NewGit(false, dir, nil)
+
+	// Model writes 60 (worse than baseline 50 when minimizing) — should be discarded.
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{{
+					Type:  llm.BlockToolUse,
+					ID:    "write_1",
+					Name:  tools.ToolWriteFile,
+					Input: json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"60"}`, counterPath)),
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Content:    []llm.ContentBlock{{Type: llm.BlockText, Text: "wrote 60"}},
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+
+	loop := NewLoop(LoopParams{
+		Config:   cfg,
+		Provider: provider,
+		Executor: executor,
+		Eval:     eval,
+		Git:      git,
+		Logger:   logger,
+		Observer: VerboseObserver{},
+	})
+
+	if err := loop.Run(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// The iteration should be discarded because 60 > 50 (baseline) when minimizing.
+	data, _ := os.ReadFile(resultsPath)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 { // header + 1 entry
+		t.Fatalf("expected 2 lines, got %d:\n%s", len(lines), data)
+	}
+	if !strings.Contains(lines[1], "discard") {
+		t.Errorf("iter 1 should be discard (60 > baseline 50), got: %s", lines[1])
 	}
 }

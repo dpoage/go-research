@@ -47,9 +47,9 @@ func runStatus(gf globalFlags, args []string) error {
 		lastTimestamp = rows[iterCount-1].Timestamp
 	}
 
-	keptMetrics := keptMetricValues(rows)
-	bestMetric, hasBest := bestKeptMetric(rows, direction)
-	trend := display.Sparkline(keptMetrics)
+	allMetrics := allMetricValues(rows)
+	bestMetric, hasBest := bestAllMetric(rows, direction)
+	trend := display.Sparkline(allMetrics)
 
 	// Print output.
 	fmt.Printf("Branch:      %s\n", branch)
@@ -63,6 +63,9 @@ func runStatus(gf globalFlags, args []string) error {
 	} else {
 		fmt.Println("Best metric: n/a")
 	}
+	if last, ok := lastMetric(rows); ok {
+		fmt.Printf("Last metric: %.6f (%s)\n", last.Metric, last.Status)
+	}
 	if trend != "" {
 		fmt.Printf("Trend:       %s\n", trend)
 	}
@@ -75,24 +78,25 @@ func runStatus(gf globalFlags, args []string) error {
 	return nil
 }
 
-// keptMetricValues extracts the metric values from "keep" rows in order.
-func keptMetricValues(rows []resultRow) []float64 {
+// allMetricValues extracts metric values from all non-error rows in order,
+// giving a complete picture of the experiment trajectory.
+func allMetricValues(rows []resultRow) []float64 {
 	var vals []float64
 	for _, r := range rows {
-		if r.Status == experiment.StatusKeep {
+		if r.Status != experiment.StatusError {
 			vals = append(vals, r.Metric)
 		}
 	}
 	return vals
 }
 
-// bestKeptMetric returns the best metric value among "keep" rows, respecting direction.
-func bestKeptMetric(rows []resultRow, direction config.Direction) (float64, bool) {
+// bestAllMetric returns the best metric value among all non-error rows, respecting direction.
+func bestAllMetric(rows []resultRow, direction config.Direction) (float64, bool) {
 	best := math.NaN()
 	found := false
 
 	for _, r := range rows {
-		if r.Status != experiment.StatusKeep {
+		if r.Status == experiment.StatusError {
 			continue
 		}
 		if !found {
@@ -113,4 +117,14 @@ func bestKeptMetric(rows []resultRow, direction config.Direction) (float64, bool
 	}
 
 	return best, found
+}
+
+// lastMetric returns the most recent non-error result row.
+func lastMetric(rows []resultRow) (resultRow, bool) {
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Status != experiment.StatusError {
+			return rows[i], true
+		}
+	}
+	return resultRow{}, false
 }

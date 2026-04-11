@@ -19,6 +19,7 @@ const (
 	ToolEditFile   = "edit_file"
 	ToolGrep       = "grep"
 	ToolRunCommand = "run_command"
+	ToolRunEval    = "run_eval"
 	ToolDone       = "done"
 )
 

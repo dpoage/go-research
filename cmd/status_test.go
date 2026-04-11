@@ -65,57 +65,82 @@ func TestRunStatus_MaximizeDirection(t *testing.T) {
 	}
 }
 
-func TestBestKeptMetric_Minimize(t *testing.T) {
+func TestBestAllMetric_Minimize(t *testing.T) {
 	rows := []resultRow{
 		{Iteration: 1, Metric: 0.9, Status: experiment.StatusKeep},
 		{Iteration: 2, Metric: 0.5, Status: experiment.StatusKeep},
-		{Iteration: 3, Metric: 0.7, Status: experiment.StatusDiscard},
-		{Iteration: 4, Metric: 0.3, Status: experiment.StatusError},
+		{Iteration: 3, Metric: 0.3, Status: experiment.StatusDiscard},
+		{Iteration: 4, Metric: 0.1, Status: experiment.StatusError},
 	}
-	best, ok := bestKeptMetric(rows, config.DirectionMinimize)
+	best, ok := bestAllMetric(rows, config.DirectionMinimize)
 	if !ok {
 		t.Fatal("expected to find best metric")
 	}
-	if best != 0.5 {
-		t.Errorf("best = %f, want 0.5", best)
+	if best != 0.3 {
+		t.Errorf("best = %f, want 0.3 (discard row should be included)", best)
 	}
 }
 
-func TestBestKeptMetric_Maximize(t *testing.T) {
+func TestBestAllMetric_Maximize(t *testing.T) {
 	rows := []resultRow{
 		{Iteration: 1, Metric: 0.5, Status: experiment.StatusKeep},
 		{Iteration: 2, Metric: 0.9, Status: experiment.StatusKeep},
 		{Iteration: 3, Metric: 1.0, Status: experiment.StatusDiscard},
 	}
-	best, ok := bestKeptMetric(rows, config.DirectionMaximize)
+	best, ok := bestAllMetric(rows, config.DirectionMaximize)
 	if !ok {
 		t.Fatal("expected to find best metric")
 	}
-	if best != 0.9 {
-		t.Errorf("best = %f, want 0.9", best)
+	if best != 1.0 {
+		t.Errorf("best = %f, want 1.0 (discard row should be included)", best)
 	}
 }
 
-func TestKeptMetricValues(t *testing.T) {
+func TestAllMetricValues(t *testing.T) {
 	rows := []resultRow{
 		{Iteration: 1, Metric: 0.9, Status: experiment.StatusKeep},
 		{Iteration: 2, Metric: 0.5, Status: experiment.StatusDiscard},
 		{Iteration: 3, Metric: 0.7, Status: experiment.StatusKeep},
 		{Iteration: 4, Metric: 0.3, Status: experiment.StatusError},
 	}
-	vals := keptMetricValues(rows)
-	if len(vals) != 2 {
-		t.Fatalf("expected 2 values, got %d", len(vals))
+	vals := allMetricValues(rows)
+	if len(vals) != 3 {
+		t.Fatalf("expected 3 values (error excluded), got %d", len(vals))
 	}
-	if vals[0] != 0.9 || vals[1] != 0.7 {
-		t.Errorf("got %v, want [0.9 0.7]", vals)
+	if vals[0] != 0.9 || vals[1] != 0.5 || vals[2] != 0.7 {
+		t.Errorf("got %v, want [0.9 0.5 0.7]", vals)
 	}
 }
 
-func TestKeptMetricValues_Empty(t *testing.T) {
-	vals := keptMetricValues(nil)
+func TestAllMetricValues_Empty(t *testing.T) {
+	vals := allMetricValues(nil)
 	if len(vals) != 0 {
 		t.Errorf("expected empty, got %v", vals)
+	}
+}
+
+func TestLastMetric(t *testing.T) {
+	rows := []resultRow{
+		{Iteration: 1, Metric: 0.9, Status: experiment.StatusKeep},
+		{Iteration: 2, Metric: 0.5, Status: experiment.StatusDiscard},
+		{Iteration: 3, Metric: 0.0, Status: experiment.StatusError},
+	}
+	last, ok := lastMetric(rows)
+	if !ok {
+		t.Fatal("expected to find last metric")
+	}
+	if last.Metric != 0.5 || last.Status != experiment.StatusDiscard {
+		t.Errorf("got metric=%f status=%s, want 0.5/discard", last.Metric, last.Status)
+	}
+}
+
+func TestLastMetric_AllErrors(t *testing.T) {
+	rows := []resultRow{
+		{Iteration: 1, Metric: 0.0, Status: experiment.StatusError},
+	}
+	_, ok := lastMetric(rows)
+	if ok {
+		t.Error("expected no last metric when all rows are errors")
 	}
 }
 
@@ -161,13 +186,27 @@ func TestRunHistory_BadFlags(t *testing.T) {
 	}
 }
 
-func TestBestKeptMetric_NoKeepRows(t *testing.T) {
+func TestBestAllMetric_OnlyErrors(t *testing.T) {
 	rows := []resultRow{
-		{Iteration: 1, Metric: 0.5, Status: experiment.StatusDiscard},
+		{Iteration: 1, Metric: 0.5, Status: experiment.StatusError},
 		{Iteration: 2, Metric: 0.9, Status: experiment.StatusError},
 	}
-	_, ok := bestKeptMetric(rows, config.DirectionMinimize)
+	_, ok := bestAllMetric(rows, config.DirectionMinimize)
 	if ok {
-		t.Error("expected no best metric for rows with no 'keep' status")
+		t.Error("expected no best metric when all rows are errors")
+	}
+}
+
+func TestBestAllMetric_IncludesDiscards(t *testing.T) {
+	rows := []resultRow{
+		{Iteration: 1, Metric: 0.5, Status: experiment.StatusKeep},
+		{Iteration: 2, Metric: 0.8, Status: experiment.StatusDiscard},
+	}
+	best, ok := bestAllMetric(rows, config.DirectionMaximize)
+	if !ok {
+		t.Fatal("expected to find best metric")
+	}
+	if best != 0.8 {
+		t.Errorf("best = %f, want 0.8 (discard should be considered)", best)
 	}
 }

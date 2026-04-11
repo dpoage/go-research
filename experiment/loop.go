@@ -36,9 +36,10 @@ var freeTools = map[string]bool{
 // iterOutcome summarizes what happened in the previous iteration,
 // so the model has context for its next attempt.
 type iterOutcome struct {
-	Metric  float64
-	Status  Status
-	Summary string
+	Metric     float64
+	BestAtTime float64 // Best metric at the time this outcome was recorded.
+	Status     Status
+	Summary    string
 }
 
 // LoopParams holds the dependencies for an experiment Loop.
@@ -76,6 +77,12 @@ func NewLoop(p LoopParams) *Loop {
 	}
 }
 
+// Shared input schemas for tools used in both action and orientation phases.
+var (
+	readFileSchema = json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to read"},"offset":{"type":"integer","description":"Start reading from this line number (1-based, optional)"},"limit":{"type":"integer","description":"Maximum number of lines to return (optional)"}},"required":["path"]}`)
+	grepSchema     = json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Search pattern (basic regex)"},"path":{"type":"string","description":"File or directory to search (default: .)"},"include":{"type":"string","description":"Glob pattern to filter files, e.g. *.py"}},"required":["pattern"]}`)
+)
+
 // ToolDefs returns the tool definitions to register with the LLM.
 // Descriptions include dynamic context (writable files, round budget) so the
 // model has actionable information without having to parse the user prompt.
@@ -84,8 +91,8 @@ func ToolDefs(cfg *config.Config) []llm.ToolDef {
 	return []llm.ToolDef{
 		{
 			Name:        tools.ToolReadFile,
-			Description: "Read file contents. Editable files are inlined in your prompt — use this only for other files or files too large to inline. Free (does not consume a round).",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to read"},"offset":{"type":"integer","description":"Start reading from this line number (1-based, optional)"},"limit":{"type":"integer","description":"Maximum number of lines to return (optional)"}},"required":["path"]}`),
+			Description: "Read file contents. Free (does not consume a round).",
+			InputSchema: readFileSchema,
 		},
 		{
 			Name:        tools.ToolWriteFile,
@@ -100,7 +107,7 @@ func ToolDefs(cfg *config.Config) []llm.ToolDef {
 		{
 			Name:        tools.ToolGrep,
 			Description: "Search file contents with grep -rn. Free (does not consume a round).",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Search pattern (basic regex)"},"path":{"type":"string","description":"File or directory to search (default: .)"},"include":{"type":"string","description":"Glob pattern to filter files, e.g. *.py"}},"required":["pattern"]}`),
+			InputSchema: grepSchema,
 		},
 		{
 			Name:        tools.ToolRunCommand,
@@ -132,7 +139,7 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 	bestMetric := math.NaN()
 	toolDefs := ToolDefs(l.config)
 	consecutiveErrors := 0
-	var lastResult *iterOutcome
+	var history []iterOutcome
 
 	// Run initial benchmark so the model has a baseline.
 	l.observer.EvalStarted()
@@ -151,31 +158,52 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 		l.observer.IterationStart(iter, maxIter)
 
-		prompt := l.buildPrompt(iter, bestMetric, lastResult)
-		messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, prompt)}
-
-		// Run tool-use turns until the model stops requesting tools.
-		var stats ToolLoopStats
-		messages, stats, err = l.toolLoop(ctx, system, messages, toolDefs)
-		l.observer.ToolLoopComplete(iter, stats)
+		// Phase 1: Orientation — structured fact-finding before acting.
+		histEntries := buildIterHistory(history, 10)
+		brief, orientStats, err := l.runOrientation(ctx, system, iter, bestMetric, histEntries)
 		if err != nil {
 			l.observer.IterationError(iter, err)
-			l.logResult(iter, EvalResult{Error: err}, StatusError, err.Error(), stats)
-			lastResult = &iterOutcome{Status: StatusError}
+			l.logResult(iter, EvalResult{Error: err}, StatusError, err.Error(), orientStats)
+			history = append(history, iterOutcome{Status: StatusError})
 			if abortErr := l.checkCircuitBreaker(&consecutiveErrors, err); abortErr != nil {
 				return abortErr
 			}
 			continue
 		}
 
-		// Evaluate.
+		// Phase 2: Action — execute the planned change.
+		prompt := l.buildActionPrompt(iter, bestMetric, brief)
+		messages := []llm.Message{llm.NewTextMessage(llm.RoleUser, prompt)}
+
+		var actionStats ToolLoopStats
+		messages, actionStats, err = l.toolLoop(ctx, system, messages, toolDefs)
+
+		// Merge orientation + action stats for reporting.
+		stats := ToolLoopStats{
+			Rounds:       orientStats.Rounds + actionStats.Rounds,
+			InputTokens:  orientStats.InputTokens + actionStats.InputTokens,
+			OutputTokens: orientStats.OutputTokens + actionStats.OutputTokens,
+			Summary:      actionStats.Summary,
+		}
+		l.observer.ToolLoopComplete(iter, stats)
+		if err != nil {
+			l.observer.IterationError(iter, err)
+			l.logResult(iter, EvalResult{Error: err}, StatusError, err.Error(), stats)
+			history = append(history, iterOutcome{Status: StatusError})
+			if abortErr := l.checkCircuitBreaker(&consecutiveErrors, err); abortErr != nil {
+				return abortErr
+			}
+			continue
+		}
+
+		// Phase 3: Evaluate.
 		l.observer.EvalStarted()
 		result := l.eval.Run(ctx)
 		if result.Error != nil {
 			l.observer.IterationError(iter, result.Error)
 			l.revert(iter)
 			l.logResult(iter, result, StatusError, result.Error.Error(), stats)
-			lastResult = &iterOutcome{Status: StatusError}
+			history = append(history, iterOutcome{Status: StatusError})
 			if abortErr := l.checkCircuitBreaker(&consecutiveErrors, result.Error); abortErr != nil {
 				return abortErr
 			}
@@ -186,14 +214,14 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 
 		l.observer.EvalResult(iter, result.Metric, result.Elapsed)
 
-		// Decide keep/discard.
+		// Phase 4: Decide keep/discard.
 		if l.isBetter(result.Metric, bestMetric) {
 			l.observer.Improvement(iter, result.Metric, bestMetric)
+			prevBest := bestMetric
 			bestMetric = result.Metric
 
-			// Log before commit so the results file is included in the snapshot.
 			l.logResult(iter, result, StatusKeep, "", stats)
-			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusKeep, Summary: stats.Summary}
+			history = append(history, iterOutcome{Metric: result.Metric, BestAtTime: prevBest, Status: StatusKeep, Summary: actionStats.Summary})
 
 			if err := l.git.Commit(fmt.Sprintf("iter %d: metric=%.6f", iter, result.Metric), l.logger.Path()); err != nil {
 				l.observer.Warning(fmt.Sprintf("git commit failed: %v", err))
@@ -201,9 +229,8 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 		} else {
 			l.observer.NoImprovement(iter, result.Metric, bestMetric)
 			l.revert(iter)
-			// Log after revert so the entry isn't reverted with the code changes.
 			l.logResult(iter, result, StatusDiscard, fmt.Sprintf("best=%.6f", bestMetric), stats)
-			lastResult = &iterOutcome{Metric: result.Metric, Status: StatusDiscard, Summary: stats.Summary}
+			history = append(history, iterOutcome{Metric: result.Metric, BestAtTime: bestMetric, Status: StatusDiscard, Summary: actionStats.Summary})
 		}
 	}
 
@@ -211,102 +238,46 @@ func (l *Loop) Run(ctx context.Context, maxIter int) error {
 	return nil
 }
 
-func (l *Loop) buildPrompt(iter int, bestMetric float64, last *iterOutcome) string {
+func (l *Loop) buildActionPrompt(iter int, bestMetric float64, brief OrientationBrief) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Iteration %d\n\n", iter)
+	fmt.Fprintf(&b, "## Action — Iteration %d\n\n", iter)
+	b.WriteString("You MUST execute the planned change below. If it is impossible, explain why and call done — do not pivot to a different change.\n\n")
 
-	// Context block — compact key-value layout.
+	// Context block.
 	fmt.Fprintf(&b, "**Files:** %v  |  **Eval:** `%s`  |  **Direction:** %v\n",
 		l.config.Files, l.config.Eval.Command, l.config.Eval.Direction)
 
 	if !math.IsNaN(bestMetric) {
-		fmt.Fprintf(&b, "**Best metric:** %.6f", bestMetric)
-		if last == nil {
-			b.WriteString(" (baseline)")
-		}
+		fmt.Fprintf(&b, "**Best metric:** %.6f\n", bestMetric)
 	}
 
-	if last != nil {
-		switch last.Status {
-		case StatusKeep:
-			fmt.Fprintf(&b, "  |  **Last:** kept (%.6f) — try a different improvement", last.Metric)
-		case StatusDiscard:
-			fmt.Fprintf(&b, "  |  **Last:** discarded (%.6f)", last.Metric)
-			if last.Summary != "" {
-				fmt.Fprintf(&b, " — tried: %s. Try a DIFFERENT approach", last.Summary)
-			} else {
-				b.WriteString(" — try something else")
-			}
-		case StatusError:
-			b.WriteString("  |  **Last:** error — try a different approach")
-		}
-	}
+	// Orientation brief — presented as given context, not as "your earlier analysis".
 	b.WriteString("\n")
+	b.WriteString(formatBriefForAction(brief))
 
-	// Protocol — explicit workflow with guardrails.
+	// Constraints first — higher attention weight at the top.
 	fmt.Fprintf(&b, `
+### Constraints
+- Make ONLY the single change in "Planned change" — nothing else.
+- Do NOT run run_eval — the harness evaluates automatically after done.
+- Do NOT re-read files the orientation phase already analyzed unless you need a specific line number.
+- Budget: %d edit rounds (read_file and grep are free).
+- The harness reverts if the metric doesn't improve, so always call done.
+
 ### Protocol
-1. Review the file contents below (already inlined — do NOT re-read them)
-2. Decide on ONE focused change to improve the metric
-3. Edit the file(s) using edit_file or write_file
-4. Call done with a summary of what you changed
-
-Do NOT:
-- Re-read files that are already inlined below
-- Run run_eval or read files after editing — the harness evaluates automatically
-- Make multiple unrelated changes in one iteration
-
-Budget: %d edit rounds (read_file and grep are free but do not stall on them).
-The harness reverts if the metric doesn't improve, so always call done.
+1. Implement the planned change — keep it minimal and isolated.
+2. If the planned change is impossible, explain why concisely and call done.
+3. If the risk materializes (e.g., compilation error, logical conflict), stop and call done rather than spiraling.
+4. Call done with a one-line summary of what you changed.
 `, l.config.Provider.MaxRounds)
-
-	// Inline current file contents so the agent can act immediately.
-	l.appendFileContents(&b)
 
 	return b.String()
 }
-
-// maxPrefillBytes is the total budget for file contents injected in the
-// synthetic turn-0 exchange. Files are included in config order until the
-// budget is exhausted; any remaining files are listed by name and size.
-const maxPrefillBytes = 16000
 
 // keepRecentRounds is the number of most-recent tool-use rounds whose
 // tool_result content is preserved verbatim by compressHistory. Older
 // rounds have their tool_result content replaced with a short summary.
 const keepRecentRounds = 3
-
-// appendFileContents writes the current contents of the editable files into
-// the prompt so the agent can act immediately without burning tool rounds on
-// initial reads. Files are included in config order until the byte budget is
-// exhausted; oversized files are listed by name and size.
-func (l *Loop) appendFileContents(b *strings.Builder) {
-	budget := maxPrefillBytes
-	b.WriteString("\n### Current file contents (already loaded — do not re-read these)\n")
-
-	var anyWritten bool
-	for _, path := range l.config.Files {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Fprintf(b, "\n**%s** — not found\n", path)
-			anyWritten = true
-			continue
-		}
-		content := string(data)
-		if len(content) <= budget {
-			fmt.Fprintf(b, "\n**%s**\n```\n%s\n```\n", path, content)
-			budget -= len(content)
-			anyWritten = true
-		} else {
-			fmt.Fprintf(b, "\n**%s** — %d bytes, use read_file to view\n", path, len(data))
-			anyWritten = true
-		}
-	}
-
-	if !anyWritten {
-		b.WriteString("(no files configured)\n")
-	}
-}
 
 // toolLoop runs LLM completion in a loop, dispatching tool calls until the model
 // calls the done tool, returns end_turn, or exhausts the round budget.

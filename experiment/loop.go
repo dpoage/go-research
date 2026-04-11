@@ -26,10 +26,11 @@ const maxConsecutiveErrors = 3
 const maxFreeRounds = 20
 
 // freeTools are tools whose rounds do not count toward the budget.
+// Note: run_eval is handled before this map is checked (see toolLoop),
+// so it does not need an entry here.
 var freeTools = map[string]bool{
 	tools.ToolReadFile: true,
 	tools.ToolGrep:     true,
-	tools.ToolRunEval:  true,
 }
 
 // iterOutcome summarizes what happened in the previous iteration,
@@ -453,6 +454,7 @@ func (l *Loop) checkCircuitBreaker(consecutiveErrors *int, err error) error {
 }
 
 // budgetMessage returns an escalating urgency reminder based on remaining rounds.
+// Messages start with "[" so compressHistory can strip stale ones from old messages.
 func budgetMessage(remaining int) string {
 	switch {
 	case remaining <= 2:
@@ -463,6 +465,7 @@ func budgetMessage(remaining int) string {
 }
 
 // freeRoundNudge returns an escalating reminder when the model is only using free tools.
+// Messages start with "[" so compressHistory can strip stale ones from old messages.
 func freeRoundNudge(consecutive int) string {
 	switch {
 	case consecutive >= 10:
@@ -501,7 +504,7 @@ func compressHistory(messages []llm.Message, keepRecent int) []llm.Message {
 		// Compress tool_result blocks and strip stale injected text in messages
 		// that precede the cutoff.
 		if seen <= cutoff && m.Role == llm.RoleUser {
-			var compressed []llm.ContentBlock
+			compressed := make([]llm.ContentBlock, 0, len(m.Content))
 			for _, b := range m.Content {
 				// Drop stale budget/nudge text blocks from old messages.
 				if b.Type == llm.BlockText && strings.HasPrefix(b.Text, "[") {
